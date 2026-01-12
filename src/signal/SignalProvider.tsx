@@ -1,0 +1,234 @@
+import { createContext, useCallback, useEffect, useMemo, useState } from 'react'
+import {
+  createDefaultSignalState,
+  normalizeSignalState,
+  type RoutingTableV2,
+  type SignalStateV1,
+} from './types'
+
+const STORAGE_KEY_PREFIX = 'liveops.signal.v1:'
+const CHANNEL_PREFIX = 'liveops-signal:'
+
+type SignalContextValue = {
+  state: SignalStateV1
+  setRouting: (routing: RoutingTableV2) => void
+  setMarquee: (text: string) => void
+  setCollectorToken: (token: string | null) => void
+  setConferenceStarted: (started: boolean, startedBy?: string) => void
+  setHostBoundEmail: (email: string | null) => void
+}
+
+export const SignalContext = createContext<SignalContextValue | null>(null)
+
+function readStoredState(room: string, storageKey: string): SignalStateV1 | null {
+  try {
+    const raw = localStorage.getItem(storageKey)
+    if (!raw) return null
+    const parsed = JSON.parse(raw)
+    return normalizeSignalState(room, parsed)
+  } catch {
+    return null
+  }
+}
+
+function writeStoredState(storageKey: string, state: SignalStateV1) {
+  localStorage.setItem(storageKey, JSON.stringify(state))
+}
+
+export function SignalProvider(props: { room: string; children: React.ReactNode }) {
+  const storageKey = useMemo(() => `${STORAGE_KEY_PREFIX}${props.room}`, [props.room])
+  const wsUrl = useMemo(() => {
+    const explicit = import.meta.env.VITE_SIGNAL_WS_URL as string | undefined
+    if (explicit) return explicit
+    const isHttps = window.location.protocol === 'https:'
+    const proto = isHttps ? 'wss' : 'ws'
+    return `${proto}://${window.location.hostname}:8787`
+  }, [])
+
+  const [state, setState] = useState<SignalStateV1>(() => {
+    return readStoredState(props.room, storageKey) ?? createDefaultSignalState(props.room)
+  })
+
+  const [wsReady, setWsReady] = useState(false)
+  const ws = useMemo(() => {
+    try {
+      return new WebSocket(wsUrl)
+    } catch {
+      return null
+    }
+  }, [wsUrl])
+
+  useEffect(() => {
+    if (state.session.opsId === props.room) return
+    setState(() => {
+      const stored = readStoredState(props.room, storageKey)
+      if (stored?.session?.opsId === props.room) return stored
+      return createDefaultSignalState(props.room)
+    })
+  }, [props.room, state.session.opsId, storageKey])
+
+  const channel = useMemo(() => {
+    if (!('BroadcastChannel' in window)) return null
+    return new BroadcastChannel(`${CHANNEL_PREFIX}${props.room}`)
+  }, [props.room])
+
+  useEffect(() => {
+    return () => {
+      try {
+        channel?.close?.()
+      } catch {
+        // noop
+      }
+    }
+  }, [channel])
+
+  useEffect(() => {
+    if (!ws) return
+
+    const onOpen = () => {
+      setWsReady(true)
+      try {
+        ws.send(JSON.stringify({ type: 'subscribe', room: props.room }))
+      } catch {
+        // noop
+      }
+    }
+    const onClose = () => setWsReady(false)
+    const onError = () => setWsReady(false)
+    const onMessage = (evt: MessageEvent) => {
+      let msg: any
+      try {
+        msg = JSON.parse(String(evt.data))
+      } catch {
+        return
+      }
+      if (msg?.type !== 'state') return
+      if (msg?.state === null) {
+        try {
+          ws.send(JSON.stringify({ type: 'set', room: props.room, state }))
+        } catch {
+          // noop
+        }
+        return
+      }
+      if (!msg?.state) return
+      const incoming = normalizeSignalState(props.room, msg.state)
+      if (incoming?.session?.opsId !== props.room) return
+      setState((prev) => {
+        if ((incoming.updatedAt ?? 0) <= (prev.updatedAt ?? 0)) return prev
+        writeStoredState(storageKey, incoming)
+        return incoming
+      })
+    }
+
+    ws.addEventListener('open', onOpen)
+    ws.addEventListener('close', onClose)
+    ws.addEventListener('error', onError)
+    ws.addEventListener('message', onMessage)
+    return () => {
+      ws.removeEventListener('open', onOpen)
+      ws.removeEventListener('close', onClose)
+      ws.removeEventListener('error', onError)
+      ws.removeEventListener('message', onMessage)
+      try {
+        ws.close()
+      } catch {
+        // noop
+      }
+    }
+  }, [props.room, state, storageKey, ws])
+
+  const commit = useCallback(
+    (next: SignalStateV1) => {
+      setState(next)
+      writeStoredState(storageKey, next)
+      if (ws && wsReady) {
+        try {
+          ws.send(JSON.stringify({ type: 'set', room: props.room, state: next }))
+        } catch {
+          // noop
+        }
+      }
+      channel?.postMessage({ type: 'state', state: next })
+    },
+    [channel, props.room, storageKey, ws, wsReady],
+  )
+
+  useEffect(() => {
+    const onMessage = (evt: MessageEvent) => {
+      const msg = evt.data as any
+      if (msg?.type !== 'state') return
+      const incoming = normalizeSignalState(props.room, msg?.state)
+      if (incoming?.session?.opsId !== props.room) return
+      setState((prev) => {
+        if ((incoming.updatedAt ?? 0) <= (prev.updatedAt ?? 0)) return prev
+        writeStoredState(storageKey, incoming)
+        return incoming
+      })
+    }
+    channel?.addEventListener('message', onMessage)
+    return () => channel?.removeEventListener('message', onMessage)
+  }, [channel, props.room, storageKey])
+
+  useEffect(() => {
+    const onStorage = (evt: StorageEvent) => {
+      if (evt.key !== storageKey) return
+      const stored = readStoredState(props.room, storageKey)
+      if (!stored) return
+      setState((prev) => ((stored.updatedAt ?? 0) > (prev.updatedAt ?? 0) ? stored : prev))
+    }
+    window.addEventListener('storage', onStorage)
+    return () => window.removeEventListener('storage', onStorage)
+  }, [props.room, storageKey])
+
+  const value = useMemo<SignalContextValue>(() => {
+    return {
+      state,
+      setRouting: (routing) => {
+        commit({
+          ...state,
+          updatedAt: Date.now(),
+          routing,
+        })
+      },
+      setMarquee: (text) => {
+        const now = Date.now()
+        commit({
+          ...state,
+          updatedAt: now,
+          marquee: { text, updatedAt: now },
+        })
+      },
+      setCollectorToken: (token) => {
+        const now = Date.now()
+        commit({
+          ...state,
+          updatedAt: now,
+          collector: { token, updatedAt: now },
+        })
+      },
+      setConferenceStarted: (started, startedBy) => {
+        const now = Date.now()
+        commit({
+          ...state,
+          updatedAt: now,
+          conference: {
+            started,
+            startedAt: started ? now : null,
+            startedBy: started ? (startedBy ?? null) : null,
+          },
+        })
+      },
+      setHostBoundEmail: (email) => {
+        const now = Date.now()
+        commit({
+          ...state,
+          updatedAt: now,
+          host: { boundGoogleEmail: email, updatedAt: now },
+        })
+      },
+    }
+  }, [commit, state])
+
+  return <SignalContext.Provider value={value}>{props.children}</SignalContext.Provider>
+}
