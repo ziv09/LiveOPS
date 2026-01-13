@@ -46,27 +46,41 @@ LiveOPS 是以 `meet.jit.si` External API（IFrame）為核心的戰術通訊與
 
 跑通之後再改成只允許特定 opsId/token 或加上 Firebase Auth。
 
-## Google 登入（控制端綁定主持人帳號）
+### 密碼版規則（Viewer 需密碼才能看；只有 Admin 能寫）
 
-本專案使用 Google Identity Services（GIS）做「控制端綁定主持人帳號」登入，Vite 透過環境變數讀取 Client ID。
+若你不使用 Firebase Auth，而是要用 LiveOPS 的密碼做權限控管，可改用以下規則：
 
-- 已在本機寫入：`.env.local`
-- 其他環境可參考：`.env.example`
+- Viewer 端必須知道 `VITE_VIEWER_PASSWORD` 才能讀取會議狀態
+- 只有知道 `VITE_ADMIN_PASSWORD` 的控制端才可以寫入（程式會自動在寫入時附上 `_adminProof`）
 
-### 你需要做的 Google Console 設定
+請把下列 rules 直接貼到 Realtime Database Rules（記得將密碼改成你自己的）：
 
-在 Google Cloud Console / OAuth Client（Web）設定：
-
-- Authorized JavaScript origins：
-  - `http://localhost:5173`
-  - 以及你用來讓手機/其他電腦連線的網址（例如 `http://192.168.0.10:5173`）
-
-不需要額外 API Key。
+```json
+{
+  "rules": {
+    "liveops": {
+      "v1": {
+        "rooms": {
+          "$opsId": {
+            "$viewerKey": {
+              "state": {
+                ".read": "$viewerKey === \"01151015\"",
+                ".write": "newData.child(\"_adminProof\").val() === \"bw20041015\"",
+                "_adminProof": { ".read": false }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+```
 
 ## meet.jit.si 認證與權限（部署站建議）
 
 - 建議一定用 `https`（Firebase Hosting 預設就是），行動裝置的攝影機/麥克風權限會穩很多。
-- 控制端的「Jitsi 認證」彈窗若被擋，請在瀏覽器允許該站彈窗；登入完成後關閉彈窗即可。
+- 控制端「開始串流」會讓 Viewer 從待機畫面切換到格子畫面；是否能順利入房/進等候室仍以 `meet.jit.si` 當下規則與負載為準。
 - 若遇到 `membersOnly` / `service-unavailable`，LiveOPS 的 SDK 連線會自動重試；通常等主持人就位或官方伺服器恢復就會進房。
 
 ---

@@ -1,18 +1,12 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { QRCodeCanvas } from 'qrcode.react'
 import { clearAuth, isAuthed } from '../auth/auth'
-import { clearGoogleUser, readGoogleUser } from '../auth/googleAuth'
-import { JitsiPlayer } from '../components/JitsiPlayer'
-import { GoogleSignInButton } from '../components/GoogleSignInButton'
-import { setAllParticipantVolume } from '../jitsi/jitsiHelpers'
 import { useLibJitsiConference } from '../jitsi/useLibJitsiConference'
 import { useSignal } from '../signal/useSignal'
 import type { RoutingSlotV1, RoutingSourceV1 } from '../signal/types'
 import { normalizeOpsId } from '../utils/ops'
 import { createCollectorToken } from '../utils/token'
-
-type ParticipantInfo = { participantId: string; displayName?: string }
 
 function getNextOpsId() {
   const key = 'liveops.ops.counter'
@@ -24,16 +18,12 @@ function getNextOpsId() {
 function encodeSource(source: RoutingSourceV1): string {
   if (source.type === 'none') return 'none'
   if (source.type === 'participantName') return `name:${encodeURIComponent(source.name)}`
-  if (source.type === 'collectorParticipant') return `pid:${source.participantId}`
-  if (source.type === 'localDevice') return `dev:${source.deviceId}` // legacy
   return 'none'
 }
 
 function decodeSource(value: string): RoutingSourceV1 {
   if (!value || value === 'none') return { type: 'none' }
   if (value.startsWith('name:')) return { type: 'participantName', name: decodeURIComponent(value.slice(5)) }
-  if (value.startsWith('pid:')) return { type: 'collectorParticipant', participantId: value.slice(4) }
-  if (value.startsWith('dev:')) return { type: 'localDevice', deviceId: value.slice(4) }
   return { type: 'none' }
 }
 
@@ -49,8 +39,7 @@ function isViewerClientName(name: string) {
     name.includes('-MTV') ||
     name.includes('-SRC-') ||
     name.includes('-Roster') ||
-    name.endsWith('-USR') ||
-    name === 'OPS_LOBBY'
+    name.endsWith('-USR')
   )
 }
 
@@ -60,28 +49,14 @@ export function Admin() {
   const opsId = normalizeOpsId(searchParams.get('ops') ?? '')
   const authed = isAuthed('admin')
 
-  const { state, sync, setRouting, setMarquee, setCollectorToken, setConferenceStarted, setHostBoundEmail } = useSignal()
+  const { state, sync, setRouting, setMarquee, setCollectorToken, setConferenceStarted } = useSignal()
 
   const [opsDraft, setOpsDraft] = useState(() => getNextOpsId().next)
   const [marqueeText, setMarqueeText] = useState(state.marquee.text)
   const [shareBaseUrl, setShareBaseUrl] = useState(() => window.location.origin)
-  const [googleRefresh, setGoogleRefresh] = useState(0)
-  const googleUser = useMemo(() => readGoogleUser(), [googleRefresh])
-  const [hostError, setHostError] = useState<string | null>(null)
-  const [hostMountKey, setHostMountKey] = useState(0)
-  const [hostJoined, setHostJoined] = useState(false)
-  const [hostIsModerator, setHostIsModerator] = useState<boolean | null>(null)
-  const [authPopupOpen, setAuthPopupOpen] = useState(false)
-  const [authHint, setAuthHint] = useState<string | null>(null)
-
-  const [participants, setParticipants] = useState<ParticipantInfo[]>([])
-
-  const roomApiRef = useRef<any | null>(null)
-  const hostParticipantIdRef = useRef<string | null>(null)
-
   useEffect(() => setMarqueeText(state.marquee.text), [state.marquee.text])
-  useEffect(() => setHostError(null), [state.host.boundGoogleEmail, googleUser?.email])
 
+  /*
   const openJitsiAuthPopup = () => {
     const domain = ((import.meta.env.VITE_JITSI_DOMAIN as string | undefined) ?? 'meet.jit.si')
       .replace(/^https?:\/\//, '')
@@ -108,37 +83,23 @@ export function Admin() {
       if (win.closed) {
         window.clearInterval(timer)
         setAuthPopupOpen(false)
-        setHostJoined(false)
-        setHostIsModerator(null)
-        hostParticipantIdRef.current = null
-        setHostMountKey((k) => k + 1)
+        setSdkEnabled(false)
+        window.setTimeout(() => setSdkEnabled(true), 80)
+        setHostReady(true, 'Admin')
         setAuthHint(
-          '已關閉認證視窗：已嘗試重連主持人。若仍卡「等待主持人」，請在瀏覽器允許 meet.jit.si 第三方 Cookie 後再試。',
+          '已關閉原生會議室：系統已自動重連並等待偵測主持人權限（Moderator）。若 10 秒內仍未取得，請再開啟原生會議室登入一次或稍後重試（meet.jit.si 可能暫態 service-unavailable）。',
         )
       }
     }, 500)
   }
-
-  const refreshParticipants = async () => {
-    const api = roomApiRef.current
-    if (!api) return
-    try {
-      const list: ParticipantInfo[] =
-        (await api.getParticipantsInfo?.()) ??
-        ((await api.getParticipants?.()) ?? []).map((id: string) => ({ participantId: id }))
-      setParticipants(Array.isArray(list) ? list : [])
-    } catch {
-      setParticipants([])
-    }
-  }
+  */
 
   const meetingCode = opsId || normalizeOpsId(state.session.opsId)
   const room = useMemo(() => normalizeOpsId(state.session.room || meetingCode), [meetingCode, state.session.room])
-  const canStartStreaming = hostJoined && hostIsModerator === true
 
-  const { state: lobbyHostState, api: lobbyHostApi } = useLibJitsiConference({
+  const { state: adminConfState, api: adminConfApi } = useLibJitsiConference({
     room,
-    displayName: 'OPS_LOBBY',
+    displayName: 'OPS_ADMIN_SDK',
     enabled: !!opsId && authed,
     mode: 'host',
     enableLocalAudio: false,
@@ -152,15 +113,16 @@ export function Admin() {
   }, [shareBaseUrl, state.collector.token])
 
   const sourceCandidates = useMemo(() => {
-    return participants.filter((p) => {
-      const name = p.displayName ?? ''
-      if (!name) return false
-      if (name === 'OPS_MASTER') return false
-      if (name === 'OPS_LOBBY') return false
-      if (isViewerClientName(name)) return false
-      return true
-    })
-  }, [participants])
+    return adminConfState.remotes
+      .map((r) => ({ participantId: r.id, displayName: (r.name ?? '').trim() }))
+      .filter((p) => {
+        const name = p.displayName ?? ''
+        if (!name) return false
+        if (name === 'OPS_ADMIN_SDK') return false
+        if (isViewerClientName(name)) return false
+        return true
+      })
+  }, [adminConfState.remotes])
 
   const candidateNameCounts = useMemo(() => {
     const m = new Map<string, number>()
@@ -285,69 +247,6 @@ export function Admin() {
         </div>
 
         <div className="mb-4 rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4">
-          <div className="flex flex-wrap items-start justify-between gap-3">
-            <div>
-              <div className="text-sm font-semibold">主持人權限（Google 帳號綁定）</div>
-              <div className="mt-1 text-xs text-neutral-400">
-                此登入用於 LiveOPS「啟動會議」權限控管；若你使用的 Jitsi 服務也要求主持人登入，仍需在 Jitsi 端完成登入。
-              </div>
-            </div>
-            <div className="flex items-center gap-2">
-              {googleUser ? (
-                <>
-                  <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 px-3 py-2 text-xs">
-                    <div className="text-neutral-400">已登入</div>
-                    <div className="font-mono text-neutral-100">{googleUser.email}</div>
-                  </div>
-                  <button
-                    className="h-10 rounded-lg border border-neutral-700 bg-neutral-900/30 px-3 text-sm font-semibold hover:border-neutral-500"
-                    onClick={() => {
-                      clearGoogleUser()
-                      setGoogleRefresh((n) => n + 1)
-                    }}
-                  >
-                    登出
-                  </button>
-                </>
-              ) : (
-                <div className="rounded-xl border border-neutral-800 bg-neutral-950/40 p-2">
-                  <GoogleSignInButton onSignedIn={() => setGoogleRefresh((n) => n + 1)} />
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <div className="text-xs text-neutral-400">
-              綁定主持人：{state.host.boundGoogleEmail ? (
-                <span className="font-mono text-neutral-100">{state.host.boundGoogleEmail}</span>
-              ) : (
-                <span className="text-neutral-500">（尚未綁定）</span>
-              )}
-            </div>
-            <button
-              className="h-9 rounded-lg border border-neutral-700 bg-neutral-900/30 px-3 text-xs font-semibold hover:border-neutral-500 disabled:opacity-40"
-              disabled={!googleUser?.email}
-              onClick={() => {
-                if (!googleUser?.email) return
-                setHostBoundEmail(googleUser.email)
-              }}
-            >
-              綁定目前登入帳號
-            </button>
-            <button
-              className="h-9 rounded-lg border border-neutral-700 bg-neutral-900/30 px-3 text-xs font-semibold hover:border-neutral-500"
-              onClick={() => setHostBoundEmail(null)}
-            >
-              解除綁定
-            </button>
-            {hostError ? (
-              <div className="text-xs text-red-200">{hostError}</div>
-            ) : null}
-          </div>
-        </div>
-
-        <div className="mb-4 rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-sm font-semibold">串流狀態</div>
@@ -358,52 +257,12 @@ export function Admin() {
               </div>
               {!state.conference.started ? (
                 <div className="mt-2 text-xs text-neutral-400">
-                  開始串流前必須先讓主持人（OPS_MASTER）成功入房並取得 Moderator 權限。
+                  開始串流前必須先點「開啟原生會議室（設定主持人）」並成功進入會議室（代表主持人已就位）。
                 </div>
               ) : null}
               <div className="mt-2 text-[11px] text-neutral-500">
-                Lobby Host（SDK）：{lobbyHostState.status}
-                {lobbyHostState.error ? <span className="text-amber-200">（{lobbyHostState.error}）</span> : null}
-                {lobbyHostState.lobbyPending.length > 0 ? (
-                  <span className="text-amber-200"> · 等候室 {lobbyHostState.lobbyPending.length} 人</span>
-                ) : null}
-              </div>
-
-              <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-950/30 p-3">
-                <div className="text-xs font-semibold text-neutral-200">等候室名單（手動審核）</div>
-                <div className="mt-1 text-[11px] text-neutral-400">
-                  當採集端/一般監看端被擋在等候室時，會出現在這裡；請逐一按「同意」或「拒絕」。
-                </div>
-                {lobbyHostState.lobbyPending.length === 0 ? (
-                  <div className="mt-2 text-[11px] text-neutral-500">目前等候室 0 人</div>
-                ) : (
-                  <div className="mt-2 flex flex-col gap-2 text-[11px] text-neutral-300">
-                    {lobbyHostState.lobbyPending.map((p) => (
-                      <div
-                        key={p.id}
-                        className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-800 bg-neutral-950/40 px-2 py-1"
-                      >
-                        <div className="min-w-0 max-w-[420px] truncate">
-                          {p.displayName} · {p.id.slice(0, 8)}
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button
-                            className="rounded-md border border-emerald-900/60 bg-emerald-950/40 px-2 py-0.5 text-emerald-200 hover:border-emerald-700"
-                            onClick={() => lobbyHostApi.approveLobbyAccess(p.id)}
-                          >
-                            同意
-                          </button>
-                          <button
-                            className="rounded-md border border-rose-900/60 bg-rose-950/40 px-2 py-0.5 text-rose-200 hover:border-rose-700"
-                            onClick={() => lobbyHostApi.denyLobbyAccess(p.id)}
-                          >
-                            拒絕
-                          </button>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
+                Admin SDK：{adminConfState.status}
+                {adminConfState.error ? <span className="text-amber-200">（{adminConfState.error}）</span> : null}
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -413,25 +272,13 @@ export function Admin() {
                     ? 'h-10 rounded-lg border border-neutral-700 bg-neutral-900/30 px-4 text-sm font-semibold text-neutral-100 hover:border-neutral-500'
                     : 'h-10 rounded-lg bg-emerald-300 px-4 text-sm font-semibold text-neutral-950 hover:bg-emerald-200'
                 }
-                disabled={!state.conference.started && !canStartStreaming}
+                disabled={false}
                 onClick={() => {
                   if (!state.conference.started) {
-                    if (!canStartStreaming) {
-                      setHostError('請先讓主持人入房並取得 Moderator 權限後，再開始串流。')
+                    /* if (!canStartStreaming) {
+                      setAuthHint('尚未確認主持人就位：請先開啟原生會議室，成功進入後關閉視窗即可開始串流。')
                       return
-                    }
-                    if (!state.host.boundGoogleEmail) {
-                      setHostError('請先綁定主持人 Google 帳號後再開始串流。')
-                      return
-                    }
-                    if (!googleUser?.email) {
-                      setHostError('請先以 Google 登入後再開始串流。')
-                      return
-                    }
-                    if (googleUser.email !== state.host.boundGoogleEmail) {
-                      setHostError('目前登入的 Google 帳號不符合已綁定的主持人帳號。')
-                      return
-                    }
+                    } */
                     setConferenceStarted(true, 'Admin')
                     if (!state.collector.token) setCollectorToken(createCollectorToken({ opsId: meetingCode }))
                     return
@@ -441,13 +288,13 @@ export function Admin() {
               >
                 {state.conference.started ? '停止串流（停止廣播）' : '開始串流'}
               </button>
-              <button
+              {/* <button
                 className="h-10 rounded-lg border border-neutral-700 bg-neutral-900/30 px-4 text-sm font-semibold text-neutral-100 hover:border-neutral-500"
                 onClick={openJitsiAuthPopup}
-                title="開啟 meet.jit.si 認證視窗，登入後關閉即可回來重連主持人（可能需要允許第三方 Cookie）"
+                title="開啟原生會議室（meet.jit.si），在那裡把 OPS_ADMIN_SDK 設為主持人（Moderator）或做其他原生設定"
               >
-                Jitsi 主持人登入（Google）
-              </button>
+                開啟原生會議室（設定主持人）
+              </button> */}
               <button
                 className="h-10 rounded-lg border border-neutral-800 bg-neutral-900/30 px-3 text-sm hover:border-neutral-600"
                 onClick={() => setSearchParams({ ops: meetingCode })}
@@ -457,35 +304,35 @@ export function Admin() {
             </div>
           </div>
 
-          <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-950/30 p-3">
+          {/* <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-950/30 p-3">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div className="text-xs text-neutral-300">
-                主持人連線狀態：
-                <span className={hostJoined ? 'ml-1 text-emerald-300' : 'ml-1 text-amber-300'}>
-                  ● {hostJoined ? '已入房' : '尚未確認'}
+                主持人就位：
+                <span className={state.conference.hostReady ? 'ml-1 text-emerald-300' : 'ml-1 text-amber-300'}>
+                  ● {state.conference.hostReady ? '已確認' : '尚未確認'}
                 </span>
-                {hostIsModerator === true ? (
-                  <span className="ml-2 text-emerald-300">（已取得主持人權限）</span>
-                ) : hostIsModerator === false ? (
-                  <span className="ml-2 text-amber-300">（尚未取得主持人權限）</span>
-                ) : null}
                 {authPopupOpen ? <span className="ml-2 text-neutral-400">（認證視窗開啟中…）</span> : null}
               </div>
               <button
                 className="h-9 rounded-lg border border-neutral-700 bg-neutral-900/30 px-3 text-xs font-semibold hover:border-neutral-500"
                 onClick={() => {
-                  setAuthHint('已手動重連主持人。若仍卡「等待主持人」，請先完成 Jitsi 登入或允許第三方 Cookie。')
-                  setHostJoined(false)
-                  setHostIsModerator(null)
-                  hostParticipantIdRef.current = null
-                  setHostMountKey((k) => k + 1)
+                  setAuthHint('已手動重連 SDK。若仍未取得主持人權限，請確認你是第一個入房者，或稍後重試（meet.jit.si 可能暫時性 service-unavailable）。')
+                  setSdkEnabled(false)
+                  window.setTimeout(() => setSdkEnabled(true), 80)
                 }}
               >
-                重連主持人
+                重連 SDK
+              </button>
+              <button
+                className="h-9 rounded-lg border border-neutral-700 bg-neutral-900/30 px-3 text-xs font-semibold hover:border-neutral-500"
+                onClick={() => setHostReady(false)}
+                title="若你要重新開房或重做主持人設定，可重置此狀態"
+              >
+                重置主持人
               </button>
             </div>
             {authHint ? <div className="mt-2 text-xs text-neutral-300">{authHint}</div> : null}
-          </div>
+          </div> */}
 
           {state.conference.started ? (
             <div className="mt-4 grid gap-4 md:grid-cols-2">
@@ -550,14 +397,7 @@ export function Admin() {
                   </div>
                 ) : null}
               </div>
-              <div className="flex items-center gap-2">
-                <button
-                  className="h-10 rounded-lg border border-neutral-700 bg-neutral-900/30 px-3 text-sm font-semibold hover:border-neutral-500"
-                  onClick={refreshParticipants}
-                >
-                  更新來源清單
-                </button>
-              </div>
+              <div className="flex items-center gap-2" />
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
@@ -587,15 +427,7 @@ export function Admin() {
                           value={encodeSource(slot.source)}
                           onChange={(e) => {
                             const raw = e.target.value
-                            const decoded = decodeSource(raw)
-                            const nextSource =
-                              decoded.type === 'collectorParticipant'
-                                ? (() => {
-                                    const p = sourceCandidates.find((x) => x.participantId === decoded.participantId)
-                                    const n = (p?.displayName ?? '').trim()
-                                    return { ...decoded, name: n || undefined } as const
-                                  })()
-                                : decoded
+                            const nextSource = decodeSource(raw)
                             setRouting({
                               ...state.routing,
                               mtv: updateSlot(state.routing.mtv, idx, { source: nextSource }),
@@ -603,21 +435,13 @@ export function Admin() {
                           }}
                           className="h-10 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
                         >
-                          {(() => {
-                            const v = encodeSource(slot.source)
-                            if (v === 'none') return null
-                            if (v.startsWith('pid:')) return <option value={v}>（已選取）{v.slice(4, 14)}</option>
-                            if (v.startsWith('dev:')) return <option value={v}>（舊版來源）{v.slice(4, 20)}</option>
-                            if (v.startsWith('name:')) return <option value={v}>（舊版來源）{decodeURIComponent(v.slice(5))}</option>
-                            return null
-                          })()}
                           <option value="none">（未指派）</option>
                           <optgroup label="會議室來源（採集端加入）">
                             {sourceCandidates.map((p) => {
                               const n = (p.displayName ?? '').trim()
                               const dup = (candidateNameCounts.get(n) ?? 0) > 1
                               return (
-                                <option key={p.participantId} value={`pid:${p.participantId}`}>
+                                <option key={p.participantId} value={`name:${encodeURIComponent(n)}`}>
                                   {dup ? `${n}（重複）` : n} · {p.participantId.slice(0, 8)}
                                 </option>
                               )
@@ -657,30 +481,20 @@ export function Admin() {
                           onChange={(e) => {
                             const raw = e.target.value
                             const decoded = decodeSource(raw)
-                            const nextSource =
-                              decoded.type === 'collectorParticipant'
-                                ? (() => {
-                                    const p = sourceCandidates.find((x) => x.participantId === decoded.participantId)
-                                    const n = (p?.displayName ?? '').trim()
-                                    return { ...decoded, name: n || undefined } as const
-                                  })()
-                                : decoded
+                            const nextSource = decoded
                             const defaultTitle = `來源 ${idx + 1}`
                             const currentTitle = (slot.title ?? '').trim()
                             const prevAutoTitle = (() => {
                               if (slot.source.type === 'participantName') return slot.source.name.trim()
-                              if (slot.source.type === 'collectorParticipant') return (slot.source.name ?? '').trim()
                               return ''
                             })()
                             const shouldAutoRename =
                               !currentTitle || currentTitle === defaultTitle || (prevAutoTitle && currentTitle === prevAutoTitle)
                             const nextTitle =
                               shouldAutoRename
-                                ? nextSource.type === 'collectorParticipant'
-                                  ? nextSource.name || slot.title
-                                  : nextSource.type === 'participantName'
-                                    ? nextSource.name
-                                    : slot.title
+                                ? nextSource.type === 'participantName'
+                                  ? nextSource.name
+                                  : slot.title
                                 : slot.title
                             setRouting({
                               ...state.routing,
@@ -689,21 +503,13 @@ export function Admin() {
                           }}
                           className="h-10 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
                         >
-                          {(() => {
-                            const v = encodeSource(slot.source)
-                            if (v === 'none') return null
-                            if (v.startsWith('pid:')) return <option value={v}>（已選取）{v.slice(4, 14)}</option>
-                            if (v.startsWith('dev:')) return <option value={v}>（舊版來源）{v.slice(4, 20)}</option>
-                            if (v.startsWith('name:')) return <option value={v}>（舊版來源）{decodeURIComponent(v.slice(5))}</option>
-                            return null
-                          })()}
                           <option value="none">（未指派）</option>
                           <optgroup label="會議室來源（採集端加入）">
                             {sourceCandidates.map((p) => {
                               const n = (p.displayName ?? '').trim()
                               const dup = (candidateNameCounts.get(n) ?? 0) > 1
                               return (
-                                <option key={p.participantId} value={`pid:${p.participantId}`}>
+                                <option key={p.participantId} value={`name:${encodeURIComponent(n)}`}>
                                   {dup ? `${n}（重複）` : n} · {p.participantId.slice(0, 8)}
                                 </option>
                               )
@@ -751,11 +557,11 @@ export function Admin() {
               若採集端/監看端顯示「導播確認身分中...」，代表正在等候室等待你審核。
             </div>
             <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-950/30 p-3 text-[11px] text-neutral-200">
-              {lobbyHostState.lobbyPending.length === 0 ? (
+              {adminConfState.lobbyPending.length === 0 ? (
                 <div className="text-neutral-500">目前等候室 0 人</div>
               ) : (
                 <div className="flex flex-col gap-2">
-                  {lobbyHostState.lobbyPending.map((p) => (
+                  {adminConfState.lobbyPending.map((p) => (
                     <div
                       key={p.id}
                       className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-800 bg-neutral-950/40 px-2 py-1"
@@ -766,13 +572,13 @@ export function Admin() {
                       <div className="flex items-center gap-2">
                         <button
                           className="rounded-md border border-emerald-900/60 bg-emerald-950/40 px-2 py-0.5 text-emerald-200 hover:border-emerald-700"
-                          onClick={() => lobbyHostApi.approveLobbyAccess(p.id)}
+                          onClick={() => adminConfApi.approveLobbyAccess(p.id)}
                         >
                           同意
                         </button>
                         <button
                           className="rounded-md border border-rose-900/60 bg-rose-950/40 px-2 py-0.5 text-rose-200 hover:border-rose-700"
-                          onClick={() => lobbyHostApi.denyLobbyAccess(p.id)}
+                          onClick={() => adminConfApi.denyLobbyAccess(p.id)}
                         >
                           拒絕
                         </button>
@@ -783,94 +589,34 @@ export function Admin() {
               )}
             </div>
             <div className="mt-2 text-[11px] text-neutral-500">
-              Lobby Host（SDK）：{lobbyHostState.status}
-              {lobbyHostState.error ? <span className="text-amber-200">（{lobbyHostState.error}）</span> : null}
+              Admin SDK：{adminConfState.status}
+              {adminConfState.error ? <span className="text-amber-200">（{adminConfState.error}）</span> : null}
             </div>
           </div>
 
           <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4">
-            <div className="mb-2 text-sm font-semibold">參與者狀態（同一會議室）</div>
-            <div className="text-xs text-neutral-400">這裡會看到已加入會議室的來源清單（含本機設備與遠端採集）。</div>
+            <div className="mb-2 text-sm font-semibold">參與者狀態（SDK 即時）</div>
+            <div className="text-xs text-neutral-400">來源清單來自 Admin SDK 連線，會即時更新（無需手動刷新）。</div>
             <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-950/30 p-3 text-sm">
-              {participants.length === 0 ? (
-                <div className="text-neutral-400">（尚未偵測到來源）</div>
+              {adminConfState.remotes.length === 0 ? (
+                <div className="text-neutral-400">（尚未偵測到參與者）</div>
               ) : (
                 <ul className="space-y-1">
-                  {participants.map((p) => (
-                    <li key={p.participantId} className="flex items-center justify-between gap-2">
-                      <span className="truncate">{p.displayName || '（未命名）'}</span>
-                      <span className="shrink-0 font-mono text-[10px] text-neutral-500">
-                        {p.participantId.slice(0, 10)}
-                      </span>
+                  {adminConfState.remotes.map((p) => (
+                    <li key={p.id} className="flex items-center justify-between gap-2">
+                      <span className="truncate">{p.name || '（未命名）'}</span>
+                      <span className="shrink-0 font-mono text-[10px] text-neutral-500">{p.id.slice(0, 10)}</span>
                     </li>
                   ))}
                 </ul>
               )}
             </div>
-            <button
-              className="mt-3 h-10 w-full rounded-lg border border-neutral-700 bg-neutral-900/30 px-3 text-sm font-semibold hover:border-neutral-500 disabled:opacity-40"
-              disabled={false}
-              onClick={refreshParticipants}
-            >
-              重新整理來源
-            </button>
+            <div className="mt-2 text-[11px] text-neutral-500">
+              Admin SDK：{adminConfState.status}
+              {adminConfState.error ? <span className="text-amber-200">（{adminConfState.error}）</span> : null}
+            </div>
           </div>
         </div>
-      </div>
-
-      {/* 控制端主持人（永遠先入房，避免遠端採集遇到主持人門檻） */}
-      <div className="fixed left-0 top-0 h-px w-px overflow-hidden opacity-0">
-        <JitsiPlayer
-          key={hostMountKey}
-          room={room}
-          displayName="OPS_MASTER"
-          hidden
-          onApi={(api) => {
-            roomApiRef.current = api
-            hostParticipantIdRef.current = null
-            if (!api) {
-              setHostJoined(false)
-              setHostIsModerator(null)
-              return
-            }
-            setAllParticipantVolume(api, 0)
-            const onJoined = (e: any) => {
-              hostParticipantIdRef.current = (e?.id as string | undefined) ?? null
-              setHostJoined(true)
-              setHostIsModerator(null)
-              refreshParticipants()
-            }
-            const onRoleChanged = (e: any) => {
-              const localId = hostParticipantIdRef.current
-              if (!localId) return
-              if (e?.id && e.id !== localId) return
-              if (typeof e?.role === 'string') setHostIsModerator(e.role === 'moderator')
-            }
-            const onLeft = () => {
-              hostParticipantIdRef.current = null
-              setHostJoined(false)
-              setHostIsModerator(null)
-            }
-
-            api.addListener?.('videoConferenceJoined', onJoined)
-            api.addListener?.('videoConferenceLeft', onLeft)
-            api.addListener?.('participantRoleChanged', onRoleChanged)
-            api.addListener?.('participantJoined', refreshParticipants)
-            api.addListener?.('participantLeft', refreshParticipants)
-            api.addListener?.('participantUpdated', refreshParticipants)
-          }}
-          configOverwrite={{
-            startWithAudioMuted: true,
-            startWithVideoMuted: true,
-            startConferenceOnEnter: true,
-            prejoinPageEnabled: false,
-            requireDisplayName: false,
-            disableInitialGUM: true,
-          }}
-          interfaceConfigOverwrite={{
-            TOOLBAR_BUTTONS: [],
-          }}
-        />
       </div>
     </div>
   )

@@ -48,15 +48,6 @@ function resolveSource(
     const hit = participants.find((p) => (p.displayName ?? '').trim() === target)
     return hit?.participantId ?? null
   }
-  if (source.type === 'collectorParticipant') {
-    const hit = participants.some((p) => p.participantId === source.participantId)
-    return hit ? source.participantId : null
-  }
-  if (source.type === 'localDevice') {
-    const needle = `DEV:${source.deviceId}`
-    const hit = participants.find((p) => (p.displayName ?? '').includes(needle))
-    return hit?.participantId ?? null
-  }
   return null
 }
 

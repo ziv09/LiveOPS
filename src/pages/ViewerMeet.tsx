@@ -186,14 +186,12 @@ export function ViewerMeet() {
   const visibleSourceSlots = state.routing.source.slice(pageStart, pageStart + pageSize)
 
   const routingSources = useMemo(() => {
-    const srcs: Array<{ kind: 'pid'; pid: string } | { kind: 'name'; name: string }> = []
-    if (mtvSlot?.source?.type === 'collectorParticipant') srcs.push({ kind: 'pid', pid: mtvSlot.source.participantId })
+    const srcs: Array<{ kind: 'name'; name: string }> = []
     if (mtvSlot?.source?.type === 'participantName') srcs.push({ kind: 'name', name: mtvSlot.source.name.trim() })
     for (const s of visibleSourceSlots) {
-      if (s.source.type === 'collectorParticipant') srcs.push({ kind: 'pid', pid: s.source.participantId })
       if (s.source.type === 'participantName') srcs.push({ kind: 'name', name: s.source.name.trim() })
     }
-    return srcs.filter((x) => (x.kind === 'pid' ? !!x.pid : !!x.name))
+    return srcs.filter((x) => !!x.name)
   }, [mtvSlot, visibleSourceSlots])
 
   const enabled = true
@@ -204,14 +202,20 @@ export function ViewerMeet() {
     enabled,
   })
 
-  const idToRemote = useMemo(() => {
-    const m = new Map<string, { id: string; videoTrack: any | null; audioTrack: any | null; name: string }>()
-    for (const r of confState.remotes) {
-      if (!r.id) continue
-      m.set(r.id, { id: r.id, videoTrack: r.videoTrack, audioTrack: r.audioTrack, name: (r.name ?? '').trim() })
-    }
-    return m
-  }, [confState.remotes])
+  if (!showProgram && confState.lobby.status === 'off') {
+    return (
+      <div className="relative h-full w-full bg-neutral-950">
+        <div className="absolute inset-0 grid place-items-center">
+          <img
+            src="/vite-full-white.svg"
+            alt="LiveOPS"
+            className="w-56 max-w-[70vw] opacity-90 md:w-72"
+            draggable={false}
+          />
+        </div>
+      </div>
+    )
+  }
 
   const nameToRemote = useMemo(() => {
     const m = new Map<string, { id: string; videoTrack: any | null; audioTrack: any | null }>()
@@ -225,23 +229,19 @@ export function ViewerMeet() {
 
   const mtvRemote = useMemo(() => {
     if (!showProgram) return null
-    if (mtvSlot?.source?.type === 'collectorParticipant') {
-      return idToRemote.get(mtvSlot.source.participantId) ?? null
-    }
     if (mtvSlot?.source?.type === 'participantName') {
       return nameToRemote.get(mtvSlot.source.name.trim()) ?? null
     }
     return null
-  }, [idToRemote, mtvSlot, nameToRemote, showProgram])
+  }, [mtvSlot, nameToRemote, showProgram])
 
   const sourceRemotes = useMemo(() => {
     if (!showProgram) return []
     return visibleSourceSlots.map((s) => {
-      if (s.source.type === 'collectorParticipant') return idToRemote.get(s.source.participantId) ?? null
       if (s.source.type === 'participantName') return nameToRemote.get(s.source.name.trim()) ?? null
       return null
     })
-  }, [idToRemote, nameToRemote, showProgram, visibleSourceSlots])
+  }, [nameToRemote, showProgram, visibleSourceSlots])
 
   const highIds = useMemo(() => {
     const ids: string[] = []
@@ -258,11 +258,8 @@ export function ViewerMeet() {
   const visibleIds = useMemo(() => {
     const ids: string[] = []
     for (const s of routingSources) {
-      if (s.kind === 'pid') ids.push(s.pid)
-      else {
-        const r = nameToRemote.get(s.name)
-        if (r?.id) ids.push(r.id)
-      }
+      const r = nameToRemote.get(s.name)
+      if (r?.id) ids.push(r.id)
     }
     return ids
   }, [nameToRemote, routingSources])
@@ -280,12 +277,32 @@ export function ViewerMeet() {
 
   return (
     <div className="relative h-full w-full bg-neutral-950 text-neutral-100">
+      {/* Connection status */}
+      <div className="pointer-events-none absolute left-3 bottom-4 z-30 hidden max-w-[520px] rounded-2xl border border-neutral-800 bg-neutral-950/70 px-3 py-2 text-[11px] text-neutral-200 backdrop-blur md:block">
+        <div className="flex items-center gap-2">
+          <span className="font-mono">Jitsi</span>
+          <span className={confState.status === 'joined' ? 'text-emerald-200' : confState.status === 'error' ? 'text-rose-200' : 'text-amber-200'}>
+            ● {confState.status}
+          </span>
+          <span className="mx-2 text-neutral-700">/</span>
+          <span className="font-mono">{sync.mode}</span>
+          {sync.mode === 'local' ? (
+            <span className="text-amber-200">本機</span>
+          ) : (
+            <span className={sync.connected ? 'text-emerald-200' : 'text-amber-200'}>
+              {sync.connected ? '已連線' : '連線中'}
+            </span>
+          )}
+        </div>
+        {confState.error ? <div className="mt-1 text-neutral-300">{confState.error}</div> : null}
+      </div>
+
       {(confState.lobby.status === 'joining' || confState.lobby.status === 'waiting') && (
         <div className="absolute inset-0 z-40 grid place-items-center bg-neutral-950/80 backdrop-blur">
           <div className="w-full max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/40 p-6 text-center">
             <div className="text-lg font-semibold">導播確認身分中...</div>
             <div className="mt-2 text-sm text-neutral-300">
-              {confState.lobby.message || '你已進入等候室，請稍候導播自動放行。'}
+              {confState.lobby.message || '你已進入等候室，請稍候導播放行。'}
             </div>
             <div className="mt-5 flex justify-center">
               <div className="h-8 w-8 animate-spin rounded-full border-2 border-neutral-700 border-t-neutral-200" />

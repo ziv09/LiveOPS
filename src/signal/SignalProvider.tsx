@@ -7,6 +7,7 @@ import {
 } from './types'
 import { getFirebaseDatabase, isFirebaseEnabled } from './firebase'
 import { off, onValue, ref, set } from 'firebase/database'
+import { isAuthed } from '../auth/auth'
 
 const STORAGE_KEY_PREFIX = 'liveops.signal.v1:'
 const CHANNEL_PREFIX = 'liveops-signal:'
@@ -17,7 +18,6 @@ type SignalContextValue = {
   setMarquee: (text: string) => void
   setCollectorToken: (token: string | null) => void
   setConferenceStarted: (started: boolean, startedBy?: string) => void
-  setHostBoundEmail: (email: string | null) => void
   sync: { mode: 'firebase' | 'ws' | 'local'; connected: boolean; error: string | null }
 }
 
@@ -42,7 +42,16 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
   const storageKey = useMemo(() => `${STORAGE_KEY_PREFIX}${props.room}`, [props.room])
   const firebaseEnabled = useMemo(() => isFirebaseEnabled(), [])
   const firebaseDb = useMemo(() => (firebaseEnabled ? getFirebaseDatabase() : null), [firebaseEnabled])
-  const firebasePath = useMemo(() => `liveops/v1/rooms/${props.room}/state`, [props.room])
+  const viewerKey = useMemo(
+    () => ((import.meta.env.VITE_VIEWER_PASSWORD as string | undefined) ?? '01151015').trim(),
+    [],
+  )
+  const adminKey = useMemo(
+    () => ((import.meta.env.VITE_ADMIN_PASSWORD as string | undefined) ?? 'bw20041015').trim(),
+    [],
+  )
+  const isAdminClient = isAuthed('admin')
+  const firebasePath = useMemo(() => `liveops/v1/rooms/${props.room}/${viewerKey}/state`, [props.room, viewerKey])
   const wsExplicitUrl = useMemo(() => import.meta.env.VITE_SIGNAL_WS_URL as string | undefined, [])
   const wsUrl = useMemo(() => {
     if (wsExplicitUrl) return wsExplicitUrl
@@ -168,10 +177,12 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
         const val = snap.val()
         if (!val) {
           // Seed initial state for this room if empty.
-          try {
-            set(dbRef, state)
-          } catch {
-            // noop
+          if (isAdminClient) {
+            try {
+              set(dbRef, { ...state, _adminProof: adminKey })
+            } catch {
+              // noop
+            }
           }
           return
         }
@@ -201,7 +212,7 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
         // noop
       }
     }
-  }, [firebaseDb, firebasePath, props.room, state, storageKey])
+  }, [adminKey, firebaseDb, firebasePath, isAdminClient, props.room, state, storageKey])
 
   const commit = useCallback(
     (next: SignalStateV1) => {
@@ -210,7 +221,8 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
 
       if (firebaseDb) {
         try {
-          set(ref(firebaseDb, firebasePath), next)
+          const payload = isAdminClient ? { ...next, _adminProof: adminKey } : next
+          set(ref(firebaseDb, firebasePath), payload)
           setSyncError(null)
         } catch (e) {
           setSyncError(`Firebase 寫入失敗：${String((e as any)?.message ?? e ?? '')}`)
@@ -228,7 +240,7 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
       }
       channel?.postMessage({ type: 'state', state: next })
     },
-    [channel, firebaseDb, firebasePath, props.room, storageKey, ws, wsReady],
+    [adminKey, channel, firebaseDb, firebasePath, isAdminClient, props.room, storageKey, ws, wsReady],
   )
 
   useEffect(() => {
@@ -296,18 +308,11 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
           ...state,
           updatedAt: now,
           conference: {
+            ...state.conference,
             started,
             startedAt: started ? now : null,
             startedBy: started ? (startedBy ?? null) : null,
           },
-        })
-      },
-      setHostBoundEmail: (email) => {
-        const now = Date.now()
-        commit({
-          ...state,
-          updatedAt: now,
-          host: { boundGoogleEmail: email, updatedAt: now },
         })
       },
     }

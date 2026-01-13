@@ -14,6 +14,7 @@ export type LibJitsiState = {
   error: string | null
   remotes: LibJitsiRemote[]
   micMuted: boolean
+  localRole: 'moderator' | 'participant' | null
   lobby: { status: 'off' | 'joining' | 'waiting' | 'approved' | 'denied'; message?: string | null }
   lobbyPending: Array<{ id: string; displayName: string }>
 }
@@ -43,6 +44,7 @@ export function useLibJitsiConference(params: {
     error: null,
     remotes: [],
     micMuted: true,
+    localRole: null,
     lobby: { status: 'off', message: null },
     lobbyPending: [],
   })
@@ -52,6 +54,7 @@ export function useLibJitsiConference(params: {
   const conferenceRef = useRef<any | null>(null)
   const localAudioRef = useRef<any | null>(null)
   const retryTimerRef = useRef<number | null>(null)
+  const rolePollTimerRef = useRef<number | null>(null)
   const attemptRef = useRef(0)
   const [restartSeq, setRestartSeq] = useState(0)
 
@@ -81,6 +84,20 @@ export function useLibJitsiConference(params: {
       remotes,
       lobbyPending: Array.from(lobbyPendingRef.current.entries()).map(([id, displayName]) => ({ id, displayName })),
     }))
+  }
+
+  const syncLocalRole = (conf: any) => {
+    if (!conf) return
+    let role: 'moderator' | 'participant' | null = null
+    try {
+      if (typeof conf.isModerator === 'function') role = conf.isModerator() ? 'moderator' : 'participant'
+    } catch {
+      // noop
+    }
+    setState((s) => ({ ...s, localRole: role }))
+    if (role === 'moderator' && params.mode === 'host' && params.lobby?.enabled) {
+      void enableLobbyOnConference()
+    }
   }
 
   const normalizedRoom = useMemo(() => {
@@ -230,6 +247,10 @@ export function useLibJitsiConference(params: {
         window.clearTimeout(retryTimerRef.current)
         retryTimerRef.current = null
       }
+      if (rolePollTimerRef.current !== null) {
+        window.clearInterval(rolePollTimerRef.current)
+        rolePollTimerRef.current = null
+      }
       try {
         localAudioRef.current?.dispose?.()
       } catch {
@@ -261,9 +282,7 @@ export function useLibJitsiConference(params: {
       const maxAttempts =
         typeof defaults.maxAttempts === 'number'
           ? defaults.maxAttempts
-          : params.mode === 'host'
-            ? 0
-            : 12
+          : 0 // default: keep retrying for meet.jit.si transient failures
       const baseDelay = typeof defaults.baseDelayMs === 'number' ? defaults.baseDelayMs : 1200
       const maxDelay = typeof defaults.maxDelayMs === 'number' ? defaults.maxDelayMs : 15000
 
@@ -403,6 +422,18 @@ export function useLibJitsiConference(params: {
         conf.on?.(confEvents?.TRACK_REMOVED ?? 'conference.trackRemoved', onTrackRemoved)
         conf.on?.(confEvents?.CONFERENCE_FAILED ?? 'conference.failed', onConferenceFailed)
 
+        const roleChangedEvt =
+          confEvents?.LOCAL_ROLE_CHANGED ?? confEvents?.ROLE_CHANGED ?? 'conference.localRoleChanged'
+        const onLocalRoleChanged = () => {
+          if (disposed) return
+          syncLocalRole(conf)
+        }
+        // Some deployments emit different event names; subscribe to multiple best-effort variants.
+        conf.on?.(roleChangedEvt, onLocalRoleChanged)
+        conf.on?.(confEvents?.ROLE_CHANGED ?? 'conference.roleChanged', onLocalRoleChanged)
+        conf.on?.(confEvents?.USER_ROLE_CHANGED ?? 'conference.userRoleChanged', onLocalRoleChanged)
+        conf.on?.('conference.localRoleChanged', onLocalRoleChanged)
+
         // Lobby (best-effort)
         const lobbyUserJoinedEvt = confEvents?.LOBBY_USER_JOINED ?? 'conference.lobbyUserJoined'
         const lobbyUserLeftEvt = confEvents?.LOBBY_USER_LEFT ?? 'conference.lobbyUserLeft'
@@ -457,11 +488,44 @@ export function useLibJitsiConference(params: {
           } catch {
             // noop
           }
-          applyReceiverConstraints()
 
-          if (params.mode === 'host' && params.lobby?.enabled) {
-            void enableLobbyOnConference()
+          // Seed initial participants/tracks (when joining an already-active room, meet.jit.si may not emit USER_JOINED
+          // for existing endpoints in all cases; without this, remotes can stay empty until someone reconnects).
+          try {
+            const ps: any[] = conf.getParticipants?.() ?? []
+            for (const p of ps) {
+              const id = String(p?.getId?.() ?? p?.id ?? p?._id ?? '').trim()
+              if (!id) continue
+              const dn = String(p?.getDisplayName?.() ?? p?.getName?.() ?? p?.displayName ?? '').trim()
+              participantNameRef.current.set(id, dn || id)
+            }
+          } catch {
+            // noop
           }
+          try {
+            const ts: any[] = conf.getRemoteTracks?.() ?? []
+            for (const t of ts) {
+              if (!t || t.isLocal?.()) continue
+              const pid = String(t.getParticipantId?.() ?? '').trim()
+              if (!pid) continue
+              const list = remoteTracksRef.current.get(pid) ?? []
+              if (!list.includes(t)) remoteTracksRef.current.set(pid, [...list, t])
+            }
+          } catch {
+            // noop
+          }
+          rebuildRemotes()
+          syncLocalRole(conf)
+
+          // Poll local role after join: meet.jit.si may update role after native login or focus reconnect.
+          if (params.mode === 'host') {
+            if (rolePollTimerRef.current !== null) window.clearInterval(rolePollTimerRef.current)
+            rolePollTimerRef.current = window.setInterval(() => {
+              if (disposed) return
+              syncLocalRole(conf)
+            }, 1500)
+          }
+          applyReceiverConstraints()
         })
 
         conf.join?.()
@@ -548,8 +612,9 @@ export function useLibJitsiConference(params: {
       enableLobby: () => enableLobbyOnConference(),
       approveLobbyAccess: (id: string) => approveLobbyAccess(id),
       denyLobbyAccess: (id: string) => denyLobbyAccess(id),
+      getLocalRole: () => state.localRole,
     }
-  }, [])
+  }, [state.localRole])
 
   return { state, conferenceRef, api }
 }

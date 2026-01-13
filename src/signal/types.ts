@@ -8,9 +8,6 @@ export type RoutingSourceV1 =
   | { type: 'none' }
   // 新版：以參與者顯示名稱作為來源（來源重連後仍可匹配）
   | { type: 'participantName'; name: string }
-  // 相容舊版（仍會被 normalize / upgrade 支援）
-  | { type: 'collectorParticipant'; participantId: string; name?: string }
-  | { type: 'localDevice'; deviceId: string }
 
 export type RoutingSlotV1 = {
   title: string
@@ -31,8 +28,11 @@ export type SignalStateV1 = {
   routing: RoutingTableV2
   marquee: { text: string; updatedAt: number }
   collector: { token: string | null; updatedAt: number }
-  conference: { started: boolean; startedAt: number | null; startedBy: string | null }
-  host: { boundGoogleEmail: string | null; updatedAt: number }
+  conference: {
+    started: boolean
+    startedAt: number | null
+    startedBy: string | null
+  }
 }
 
 export const DEFAULT_SLOTS = {
@@ -69,8 +69,11 @@ export function createDefaultSignalState(opsId: string): SignalStateV1 {
     routing,
     marquee: { text: '', updatedAt: now },
     collector: { token: null, updatedAt: now },
-    conference: { started: false, startedAt: null, startedBy: null },
-    host: { boundGoogleEmail: null, updatedAt: now },
+    conference: {
+      started: false,
+      startedAt: null,
+      startedBy: null,
+    },
   }
 }
 
@@ -78,8 +81,6 @@ function isRoutingSourceV1(x: any): x is RoutingSourceV1 {
   if (!x || typeof x !== 'object') return false
   if (x.type === 'none') return true
   if (x.type === 'participantName') return typeof x.name === 'string' && x.name.trim().length > 0
-  if (x.type === 'collectorParticipant') return typeof x.participantId === 'string' && x.participantId.length > 0
-  if (x.type === 'localDevice') return typeof x.deviceId === 'string' && x.deviceId.length > 0
   return false
 }
 
@@ -106,22 +107,10 @@ function normalizeRoutingV2(opsId: string, routing: any): RoutingTableV2 {
   }
 }
 
-function upgradeRoutingFromV1(opsId: string, routingV1: any): RoutingTableV2 {
-  const base = createDefaultSignalState(opsId).routing
-  const mtvPages: Array<string | null> = Array.isArray(routingV1?.mtvPages) ? routingV1.mtvPages : []
-  const sourcePages: Array<string | null> = Array.isArray(routingV1?.sourcePages) ? routingV1.sourcePages : []
-
-  const toSlot = (title: string, id: string | null): RoutingSlotV1 => {
-    if (typeof id === 'string' && id) return { title, source: { type: 'collectorParticipant', participantId: id } }
-    return { title, source: { type: 'none' } }
-  }
-
-  return {
-    v: 2,
-    opsId,
-    mtv: base.mtv.map((fb, i) => toSlot(fb.title, mtvPages[i] ?? null)),
-    source: base.source.map((fb, i) => toSlot(fb.title, sourcePages[i] ?? null)),
-  }
+function upgradeRoutingFromV1(opsId: string, _routingV1: any): RoutingTableV2 {
+  // 舊版 routing（mtvPages/sourcePages）是以 participantId 為鍵，
+  // 新版已全面改為 displayName 指派，無法可靠自動轉換，故直接回退為預設未指派。
+  return createDefaultSignalState(opsId).routing
 }
 
 export function normalizeSignalState(opsId: string, state: any): SignalStateV1 {
@@ -162,17 +151,19 @@ export function normalizeSignalState(opsId: string, state: any): SignalStateV1 {
       : base.collector
 
   const conference =
-    typeof state.conference?.started === 'boolean' &&
-    (typeof state.conference?.startedAt === 'number' || state.conference?.startedAt === null) &&
-    (typeof state.conference?.startedBy === 'string' || state.conference?.startedBy === null)
-      ? state.conference
+    typeof state.conference?.started === 'boolean'
+      ? {
+          started: state.conference.started,
+          startedAt:
+            typeof state.conference.startedAt === 'number' || state.conference.startedAt === null
+              ? state.conference.startedAt
+              : base.conference.startedAt,
+          startedBy:
+            typeof state.conference.startedBy === 'string' || state.conference.startedBy === null
+              ? state.conference.startedBy
+              : base.conference.startedBy,
+        }
       : base.conference
 
-  const host =
-    (typeof state.host?.boundGoogleEmail === 'string' || state.host?.boundGoogleEmail === null) &&
-    typeof state.host?.updatedAt === 'number'
-      ? state.host
-      : base.host
-
-  return { v: 1, updatedAt, session, routing, marquee, collector, conference, host }
+  return { v: 1, updatedAt, session, routing, marquee, collector, conference }
 }
