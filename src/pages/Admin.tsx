@@ -6,6 +6,7 @@ import { clearGoogleUser, readGoogleUser } from '../auth/googleAuth'
 import { JitsiPlayer } from '../components/JitsiPlayer'
 import { GoogleSignInButton } from '../components/GoogleSignInButton'
 import { setAllParticipantVolume } from '../jitsi/jitsiHelpers'
+import { useLibJitsiConference } from '../jitsi/useLibJitsiConference'
 import { useSignal } from '../signal/useSignal'
 import type { RoutingSlotV1, RoutingSourceV1 } from '../signal/types'
 import { normalizeOpsId } from '../utils/ops'
@@ -23,7 +24,7 @@ function getNextOpsId() {
 function encodeSource(source: RoutingSourceV1): string {
   if (source.type === 'none') return 'none'
   if (source.type === 'participantName') return `name:${encodeURIComponent(source.name)}`
-  if (source.type === 'collectorParticipant') return `pid:${source.participantId}` // legacy
+  if (source.type === 'collectorParticipant') return `pid:${source.participantId}`
   if (source.type === 'localDevice') return `dev:${source.deviceId}` // legacy
   return 'none'
 }
@@ -31,8 +32,8 @@ function encodeSource(source: RoutingSourceV1): string {
 function decodeSource(value: string): RoutingSourceV1 {
   if (!value || value === 'none') return { type: 'none' }
   if (value.startsWith('name:')) return { type: 'participantName', name: decodeURIComponent(value.slice(5)) }
-  if (value.startsWith('dev:')) return { type: 'localDevice', deviceId: value.slice(4) }
   if (value.startsWith('pid:')) return { type: 'collectorParticipant', participantId: value.slice(4) }
+  if (value.startsWith('dev:')) return { type: 'localDevice', deviceId: value.slice(4) }
   return { type: 'none' }
 }
 
@@ -48,7 +49,8 @@ function isViewerClientName(name: string) {
     name.includes('-MTV') ||
     name.includes('-SRC-') ||
     name.includes('-Roster') ||
-    name.endsWith('-USR')
+    name.endsWith('-USR') ||
+    name === 'OPS_LOBBY'
   )
 }
 
@@ -133,6 +135,15 @@ export function Admin() {
   const meetingCode = opsId || normalizeOpsId(state.session.opsId)
   const room = useMemo(() => normalizeOpsId(state.session.room || meetingCode), [meetingCode, state.session.room])
 
+  const { state: lobbyHostState, api: lobbyHostApi } = useLibJitsiConference({
+    room,
+    displayName: 'OPS_LOBBY',
+    enabled: !!opsId && authed,
+    mode: 'host',
+    enableLocalAudio: false,
+    lobby: { enabled: true, autoApprove: true },
+  })
+
   const collectorQrUrl = useMemo(() => {
     const token = state.collector.token
     if (!token) return null
@@ -144,6 +155,7 @@ export function Admin() {
       const name = p.displayName ?? ''
       if (!name) return false
       if (name === 'OPS_MASTER') return false
+      if (name === 'OPS_LOBBY') return false
       if (isViewerClientName(name)) return false
       return true
     })
@@ -331,6 +343,27 @@ export function Admin() {
                   ? '已啟動（採集端/監看端可直接加入）'
                   : '尚未啟動（採集端/監看端會顯示「LiveOPS準備中...」）'}
               </div>
+              <div className="mt-2 text-[11px] text-neutral-500">
+                Lobby Host（SDK）：{lobbyHostState.status}
+                {lobbyHostState.error ? <span className="text-amber-200">（{lobbyHostState.error}）</span> : null}
+                {lobbyHostState.lobbyPending.length > 0 ? (
+                  <span className="text-amber-200"> · 等候室 {lobbyHostState.lobbyPending.length} 人</span>
+                ) : null}
+              </div>
+              {lobbyHostState.lobbyPending.length > 0 ? (
+                <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-neutral-300">
+                  {lobbyHostState.lobbyPending.map((p) => (
+                    <button
+                      key={p.id}
+                      className="rounded-lg border border-neutral-800 bg-neutral-950/40 px-2 py-1 hover:border-neutral-600"
+                      onClick={() => lobbyHostApi.approveLobbyAccess(p.id)}
+                      title="手動放行（若自動放行失效）"
+                    >
+                      放行：{p.displayName} · {p.id.slice(0, 6)}
+                    </button>
+                  ))}
+                </div>
+              ) : null}
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -507,9 +540,19 @@ export function Admin() {
                         <select
                           value={encodeSource(slot.source)}
                           onChange={(e) => {
+                            const raw = e.target.value
+                            const decoded = decodeSource(raw)
+                            const nextSource =
+                              decoded.type === 'collectorParticipant'
+                                ? (() => {
+                                    const p = sourceCandidates.find((x) => x.participantId === decoded.participantId)
+                                    const n = (p?.displayName ?? '').trim()
+                                    return { ...decoded, name: n || undefined } as const
+                                  })()
+                                : decoded
                             setRouting({
                               ...state.routing,
-                              mtv: updateSlot(state.routing.mtv, idx, { source: decodeSource(e.target.value) }),
+                              mtv: updateSlot(state.routing.mtv, idx, { source: nextSource }),
                             })
                           }}
                           className="h-10 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
@@ -517,8 +560,9 @@ export function Admin() {
                           {(() => {
                             const v = encodeSource(slot.source)
                             if (v === 'none') return null
-                            if (v.startsWith('pid:')) return <option value={v}>（舊版來源）{v.slice(4, 14)}</option>
+                            if (v.startsWith('pid:')) return <option value={v}>（已選取）{v.slice(4, 14)}</option>
                             if (v.startsWith('dev:')) return <option value={v}>（舊版來源）{v.slice(4, 20)}</option>
+                            if (v.startsWith('name:')) return <option value={v}>（舊版來源）{decodeURIComponent(v.slice(5))}</option>
                             return null
                           })()}
                           <option value="none">（未指派）</option>
@@ -527,7 +571,7 @@ export function Admin() {
                               const n = (p.displayName ?? '').trim()
                               const dup = (candidateNameCounts.get(n) ?? 0) > 1
                               return (
-                                <option key={p.participantId} value={`name:${encodeURIComponent(n)}`}>
+                                <option key={p.participantId} value={`pid:${p.participantId}`}>
                                   {dup ? `${n}（重複）` : n} · {p.participantId.slice(0, 8)}
                                 </option>
                               )
@@ -565,15 +609,33 @@ export function Admin() {
                         <select
                           value={encodeSource(slot.source)}
                           onChange={(e) => {
-                            const nextSource = decodeSource(e.target.value)
+                            const raw = e.target.value
+                            const decoded = decodeSource(raw)
+                            const nextSource =
+                              decoded.type === 'collectorParticipant'
+                                ? (() => {
+                                    const p = sourceCandidates.find((x) => x.participantId === decoded.participantId)
+                                    const n = (p?.displayName ?? '').trim()
+                                    return { ...decoded, name: n || undefined } as const
+                                  })()
+                                : decoded
                             const defaultTitle = `來源 ${idx + 1}`
                             const currentTitle = (slot.title ?? '').trim()
-                            const prevAutoTitle =
-                              slot.source.type === 'participantName' ? slot.source.name.trim() : ''
+                            const prevAutoTitle = (() => {
+                              if (slot.source.type === 'participantName') return slot.source.name.trim()
+                              if (slot.source.type === 'collectorParticipant') return (slot.source.name ?? '').trim()
+                              return ''
+                            })()
                             const shouldAutoRename =
                               !currentTitle || currentTitle === defaultTitle || (prevAutoTitle && currentTitle === prevAutoTitle)
                             const nextTitle =
-                              shouldAutoRename && nextSource.type === 'participantName' ? nextSource.name : slot.title
+                              shouldAutoRename
+                                ? nextSource.type === 'collectorParticipant'
+                                  ? nextSource.name || slot.title
+                                  : nextSource.type === 'participantName'
+                                    ? nextSource.name
+                                    : slot.title
+                                : slot.title
                             setRouting({
                               ...state.routing,
                               source: updateSlot(state.routing.source, idx, { source: nextSource, title: nextTitle }),
@@ -584,8 +646,9 @@ export function Admin() {
                           {(() => {
                             const v = encodeSource(slot.source)
                             if (v === 'none') return null
-                            if (v.startsWith('pid:')) return <option value={v}>（舊版來源）{v.slice(4, 14)}</option>
+                            if (v.startsWith('pid:')) return <option value={v}>（已選取）{v.slice(4, 14)}</option>
                             if (v.startsWith('dev:')) return <option value={v}>（舊版來源）{v.slice(4, 20)}</option>
+                            if (v.startsWith('name:')) return <option value={v}>（舊版來源）{decodeURIComponent(v.slice(5))}</option>
                             return null
                           })()}
                           <option value="none">（未指派）</option>
@@ -594,7 +657,7 @@ export function Admin() {
                               const n = (p.displayName ?? '').trim()
                               const dup = (candidateNameCounts.get(n) ?? 0) > 1
                               return (
-                                <option key={p.participantId} value={`name:${encodeURIComponent(n)}`}>
+                                <option key={p.participantId} value={`pid:${p.participantId}`}>
                                   {dup ? `${n}（重複）` : n} · {p.participantId.slice(0, 8)}
                                 </option>
                               )

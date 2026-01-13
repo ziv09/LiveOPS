@@ -9,7 +9,7 @@ export type RoutingSourceV1 =
   // 新版：以參與者顯示名稱作為來源（來源重連後仍可匹配）
   | { type: 'participantName'; name: string }
   // 相容舊版（仍會被 normalize / upgrade 支援）
-  | { type: 'collectorParticipant'; participantId: string }
+  | { type: 'collectorParticipant'; participantId: string; name?: string }
   | { type: 'localDevice'; deviceId: string }
 
 export type RoutingSlotV1 = {

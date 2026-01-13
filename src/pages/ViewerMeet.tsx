@@ -184,27 +184,16 @@ export function ViewerMeet() {
   const pageStart = sourcePage * pageSize
   const visibleSourceSlots = state.routing.source.slice(pageStart, pageStart + pageSize)
 
-  const routingNames = useMemo(() => {
-    const names: string[] = []
-    if (mtvSlot?.source?.type === 'participantName') names.push(mtvSlot.source.name.trim())
+  const routingSources = useMemo(() => {
+    const srcs: Array<{ kind: 'pid'; pid: string } | { kind: 'name'; name: string }> = []
+    if (mtvSlot?.source?.type === 'collectorParticipant') srcs.push({ kind: 'pid', pid: mtvSlot.source.participantId })
+    if (mtvSlot?.source?.type === 'participantName') srcs.push({ kind: 'name', name: mtvSlot.source.name.trim() })
     for (const s of visibleSourceSlots) {
-      if (s.source.type === 'participantName') names.push(s.source.name.trim())
+      if (s.source.type === 'collectorParticipant') srcs.push({ kind: 'pid', pid: s.source.participantId })
+      if (s.source.type === 'participantName') srcs.push({ kind: 'name', name: s.source.name.trim() })
     }
-    return names.filter(Boolean)
+    return srcs.filter((x) => (x.kind === 'pid' ? !!x.pid : !!x.name))
   }, [mtvSlot, visibleSourceSlots])
-
-  const fullscreenName = useMemo(() => {
-    if (!fullscreenKey) return null
-    if (fullscreenKey === 'mtv') {
-      return mtvSlot?.source?.type === 'participantName' ? mtvSlot.source.name.trim() : null
-    }
-    if (fullscreenKey.startsWith('src:')) {
-      const idx = Number.parseInt(fullscreenKey.slice(4), 10)
-      const slot = visibleSourceSlots[idx]
-      return slot?.source?.type === 'participantName' ? slot.source.name.trim() : null
-    }
-    return null
-  }, [fullscreenKey, mtvSlot, visibleSourceSlots])
 
   const enabled = true
 
@@ -213,6 +202,15 @@ export function ViewerMeet() {
     displayName: `${name}-USR`,
     enabled,
   })
+
+  const idToRemote = useMemo(() => {
+    const m = new Map<string, { id: string; videoTrack: any | null; audioTrack: any | null; name: string }>()
+    for (const r of confState.remotes) {
+      if (!r.id) continue
+      m.set(r.id, { id: r.id, videoTrack: r.videoTrack, audioTrack: r.audioTrack, name: (r.name ?? '').trim() })
+    }
+    return m
+  }, [confState.remotes])
 
   const nameToRemote = useMemo(() => {
     const m = new Map<string, { id: string; videoTrack: any | null; audioTrack: any | null }>()
@@ -226,36 +224,47 @@ export function ViewerMeet() {
 
   const mtvRemote = useMemo(() => {
     if (!showProgram) return null
-    if (mtvSlot?.source?.type !== 'participantName') return null
-    return nameToRemote.get(mtvSlot.source.name.trim()) ?? null
-  }, [mtvSlot, nameToRemote, showProgram])
+    if (mtvSlot?.source?.type === 'collectorParticipant') {
+      return idToRemote.get(mtvSlot.source.participantId) ?? null
+    }
+    if (mtvSlot?.source?.type === 'participantName') {
+      return nameToRemote.get(mtvSlot.source.name.trim()) ?? null
+    }
+    return null
+  }, [idToRemote, mtvSlot, nameToRemote, showProgram])
 
   const sourceRemotes = useMemo(() => {
     if (!showProgram) return []
     return visibleSourceSlots.map((s) => {
-      if (s.source.type !== 'participantName') return null
-      return nameToRemote.get(s.source.name.trim()) ?? null
+      if (s.source.type === 'collectorParticipant') return idToRemote.get(s.source.participantId) ?? null
+      if (s.source.type === 'participantName') return nameToRemote.get(s.source.name.trim()) ?? null
+      return null
     })
-  }, [nameToRemote, showProgram, visibleSourceSlots])
+  }, [idToRemote, nameToRemote, showProgram, visibleSourceSlots])
 
   const highIds = useMemo(() => {
     const ids: string[] = []
     if (mtvRemote?.id) ids.push(mtvRemote.id)
-    if (fullscreenName) {
-      const fs = nameToRemote.get(fullscreenName)
+    if (fullscreenKey === 'mtv' && mtvRemote?.id) ids.push(mtvRemote.id)
+    if (fullscreenKey?.startsWith('src:')) {
+      const idx = Number.parseInt(fullscreenKey.slice(4), 10)
+      const fs = sourceRemotes[idx]
       if (fs?.id) ids.push(fs.id)
     }
     return ids
-  }, [fullscreenName, mtvRemote?.id, nameToRemote])
+  }, [fullscreenKey, mtvRemote?.id, sourceRemotes])
 
   const visibleIds = useMemo(() => {
     const ids: string[] = []
-    for (const n of routingNames) {
-      const r = nameToRemote.get(n)
-      if (r?.id) ids.push(r.id)
+    for (const s of routingSources) {
+      if (s.kind === 'pid') ids.push(s.pid)
+      else {
+        const r = nameToRemote.get(s.name)
+        if (r?.id) ids.push(r.id)
+      }
     }
     return ids
-  }, [nameToRemote, routingNames])
+  }, [nameToRemote, routingSources])
 
   useEffect(() => {
     api.setReceiverHints(highIds, visibleIds)
@@ -270,6 +279,35 @@ export function ViewerMeet() {
 
   return (
     <div className="relative h-full w-full bg-neutral-950 text-neutral-100">
+      {(confState.lobby.status === 'joining' || confState.lobby.status === 'waiting') && (
+        <div className="absolute inset-0 z-40 grid place-items-center bg-neutral-950/80 backdrop-blur">
+          <div className="w-full max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/40 p-6 text-center">
+            <div className="text-lg font-semibold">導播確認身分中...</div>
+            <div className="mt-2 text-sm text-neutral-300">
+              {confState.lobby.message || '你已進入等候室，請稍候導播自動放行。'}
+            </div>
+            <div className="mt-5 flex justify-center">
+              <div className="h-8 w-8 animate-spin rounded-full border-2 border-neutral-700 border-t-neutral-200" />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confState.lobby.status === 'denied' && (
+        <div className="absolute inset-0 z-40 grid place-items-center bg-neutral-950/80 backdrop-blur">
+          <div className="w-full max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/40 p-6 text-center">
+            <div className="text-lg font-semibold">無法加入會議</div>
+            <div className="mt-2 text-sm text-neutral-300">{confState.lobby.message || '導播拒絕加入。'}</div>
+            <button
+              className="mt-5 h-10 rounded-lg bg-neutral-100 px-4 text-sm font-semibold text-neutral-950 hover:bg-white"
+              onClick={() => navigate('/')}
+            >
+              返回首頁
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* remote audio renderers */}
       <div className="fixed left-0 top-0 h-px w-px overflow-hidden opacity-0">
         {allRemoteAudios.map((a) => (

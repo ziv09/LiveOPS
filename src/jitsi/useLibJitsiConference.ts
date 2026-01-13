@@ -14,6 +14,8 @@ export type LibJitsiState = {
   error: string | null
   remotes: LibJitsiRemote[]
   micMuted: boolean
+  lobby: { status: 'off' | 'joining' | 'waiting' | 'approved' | 'denied'; message?: string | null }
+  lobbyPending: Array<{ id: string; displayName: string }>
 }
 
 function pickBestVideoTrack(tracks: any[]): any | null {
@@ -27,22 +29,38 @@ export function useLibJitsiConference(params: {
   room: string
   displayName: string
   enabled: boolean
+  mode?: 'viewer' | 'host'
+  enableLocalAudio?: boolean
+  retry?: { maxAttempts?: number; baseDelayMs?: number; maxDelayMs?: number }
+  lobby?: {
+    enabled?: boolean
+    autoApprove?: boolean
+    allowNames?: string[]
+  }
 }) {
   const [state, setState] = useState<LibJitsiState>({
     status: 'idle',
     error: null,
     remotes: [],
     micMuted: true,
+    lobby: { status: 'off', message: null },
+    lobbyPending: [],
   })
 
   const domain = useMemo(() => getJitsiDomain(), [])
   const connectionRef = useRef<any | null>(null)
   const conferenceRef = useRef<any | null>(null)
   const localAudioRef = useRef<any | null>(null)
+  const retryTimerRef = useRef<number | null>(null)
+  const attemptRef = useRef(0)
+  const [restartSeq, setRestartSeq] = useState(0)
 
   const participantNameRef = useRef<Map<string, string>>(new Map())
   const remoteTracksRef = useRef<Map<string, any[]>>(new Map())
   const receiverHintRef = useRef<{ high: string[]; visible: string[] }>({ high: [], visible: [] })
+  const lobbyPendingRef = useRef<Map<string, string>>(new Map())
+
+  const shouldEnableLocalAudio = params.enableLocalAudio ?? (params.mode === 'host' ? false : true)
 
   const rebuildRemotes = () => {
     const ids = new Set<string>([
@@ -58,7 +76,11 @@ export function useLibJitsiConference(params: {
       remotes.push({ id, name, videoTrack, audioTrack })
     }
     remotes.sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant'))
-    setState((prev) => ({ ...prev, remotes }))
+    setState((prev) => ({
+      ...prev,
+      remotes,
+      lobbyPending: Array.from(lobbyPendingRef.current.entries()).map(([id, displayName]) => ({ id, displayName })),
+    }))
   }
 
   const normalizedRoom = useMemo(() => {
@@ -88,7 +110,7 @@ export function useLibJitsiConference(params: {
     const constraints = {
       lastN: Math.max(0, visible.length),
       selectedEndpoints: visible,
-      defaultConstraints: { maxHeight: 180 },
+      defaultConstraints: { maxHeight: 360 },
       constraints: Object.fromEntries(high.map((id) => [id, { maxHeight: 1080 }])),
     }
 
@@ -105,6 +127,61 @@ export function useLibJitsiConference(params: {
     }
   }
 
+  const setLobbyStatus = (status: LibJitsiState['lobby']['status'], message?: string | null) => {
+    setState((s) => ({ ...s, lobby: { status, message: message ?? null } }))
+  }
+
+  const enableLobbyOnConference = async () => {
+    const conf = conferenceRef.current
+    if (!conf) return
+    try {
+      if (typeof conf.enableLobby === 'function') {
+        await conf.enableLobby()
+        return
+      }
+    } catch {
+      // noop
+    }
+    try {
+      if (conf.lobby && typeof conf.lobby.enable === 'function') {
+        await conf.lobby.enable()
+      }
+    } catch {
+      // noop
+    }
+  }
+
+  const approveLobbyAccess = async (id: string) => {
+    const conf = conferenceRef.current
+    if (!conf || !id) return
+    try {
+      if (conf.lobby && typeof conf.lobby.approveAccess === 'function') {
+        await conf.lobby.approveAccess(id)
+        return
+      }
+    } catch {
+      // noop
+    }
+    try {
+      if (typeof conf.approveLobbyAccess === 'function') {
+        await conf.approveLobbyAccess(id)
+        return
+      }
+    } catch {
+      // noop
+    }
+    try {
+      if (typeof conf.lobbyApproveAccess === 'function') {
+        await conf.lobbyApproveAccess(id)
+      }
+    } catch {
+      // noop
+    }
+  }
+
+  // meet.jit.si 對 SDK 的 lobby/membersOnly 規則會依房間狀態變動；
+  // 此處以「membersOnly => 等待主持人就位後自動重連」策略處理，避免依賴 joinLobby API。
+
   useEffect(() => {
     if (!params.enabled) return
     if (!params.room) return
@@ -113,6 +190,10 @@ export function useLibJitsiConference(params: {
     setState((s) => ({ ...s, status: 'connecting', error: null }))
 
     const stop = async () => {
+      if (retryTimerRef.current !== null) {
+        window.clearTimeout(retryTimerRef.current)
+        retryTimerRef.current = null
+      }
       try {
         localAudioRef.current?.dispose?.()
       } catch {
@@ -138,6 +219,42 @@ export function useLibJitsiConference(params: {
       remoteTracksRef.current.clear()
     }
 
+    const scheduleRestart = (reason: string, delayMs?: number) => {
+      if (disposed) return
+      const defaults = params.retry ?? {}
+      const maxAttempts =
+        typeof defaults.maxAttempts === 'number'
+          ? defaults.maxAttempts
+          : params.mode === 'host'
+            ? 0
+            : 12
+      const baseDelay = typeof defaults.baseDelayMs === 'number' ? defaults.baseDelayMs : 1200
+      const maxDelay = typeof defaults.maxDelayMs === 'number' ? defaults.maxDelayMs : 15000
+
+      attemptRef.current += 1
+      if (maxAttempts > 0 && attemptRef.current > maxAttempts) {
+        setState((s) => ({ ...s, status: 'error', error: `連線失敗（已達最大重試次數）：${reason}` }))
+        return
+      }
+
+      const computedDelay =
+        typeof delayMs === 'number'
+          ? delayMs
+          : Math.min(maxDelay, baseDelay * Math.pow(1.4, Math.max(0, attemptRef.current - 1)))
+
+      setState((s) => ({
+        ...s,
+        status: 'connecting',
+        error: `連線不穩定，重試中（${attemptRef.current}${maxAttempts > 0 ? `/${maxAttempts}` : ''}）：${reason}`,
+      }))
+
+      if (retryTimerRef.current !== null) window.clearTimeout(retryTimerRef.current)
+      retryTimerRef.current = window.setTimeout(() => {
+        if (disposed) return
+        setRestartSeq((n) => n + 1)
+      }, computedDelay)
+    }
+
     ;(async () => {
       const JitsiMeetJS = await loadLibJitsiMeet(domain)
       if (disposed) return
@@ -161,15 +278,11 @@ export function useLibJitsiConference(params: {
 
       const onConnFailed = (e: any) => {
         if (disposed) return
-        setState((s) => ({
-          ...s,
-          status: 'error',
-          error: `連線失敗（Jitsi）${e?.message ? `：${String(e.message)}` : ''}`,
-        }))
+        scheduleRestart(String(e?.message ?? e ?? '連線失敗（Jitsi）'))
       }
       const onConnDisconnected = () => {
         if (disposed) return
-        setState((s) => ({ ...s, status: 'error', error: '連線中斷（Jitsi）' }))
+        scheduleRestart('連線中斷（Jitsi）')
       }
       const onConnSuccess = () => {
         if (disposed) return
@@ -180,11 +293,7 @@ export function useLibJitsiConference(params: {
             openBridgeChannel: true,
           })
         } catch (e: any) {
-          setState((s) => ({
-            ...s,
-            status: 'error',
-            error: `會議室初始化失敗：${String(e?.message ?? e ?? '')}`,
-          }))
+          scheduleRestart(`會議室初始化失敗：${String(e?.message ?? e ?? '')}`)
           return
         }
         conferenceRef.current = conf
@@ -194,11 +303,13 @@ export function useLibJitsiConference(params: {
 
         const onConferenceFailed = (e: any) => {
           if (disposed) return
-          setState((s) => ({
-            ...s,
-            status: 'error',
-            error: `加入會議失敗：${String(e?.message ?? e?.error ?? e ?? '')}`,
-          }))
+          const err = String(e?.error ?? e?.message ?? e ?? '')
+          if (err.includes('membersOnly')) {
+            setLobbyStatus('waiting', '導播確認身分中...（等待主持人就位）')
+            scheduleRestart('membersOnly（等待主持人就位）', 1500)
+            return
+          }
+          scheduleRestart(`加入會議失敗：${String(e?.message ?? e?.error ?? e ?? '')}`)
         }
 
         const onUserJoined = (id: string, user: any) => {
@@ -222,6 +333,13 @@ export function useLibJitsiConference(params: {
           if (!track || track.isLocal?.()) return
           const pid = track.getParticipantId?.()
           if (!pid) return
+          try {
+            const p = conf.getParticipantById?.(pid)
+            const n = p?.getDisplayName?.() ?? p?.getName?.() ?? ''
+            if (typeof n === 'string' && n.trim()) participantNameRef.current.set(pid, n.trim())
+          } catch {
+            // noop
+          }
           const list = remoteTracksRef.current.get(pid) ?? []
           remoteTracksRef.current.set(pid, [...list, track])
           rebuildRemotes()
@@ -245,50 +363,97 @@ export function useLibJitsiConference(params: {
         conf.on?.(confEvents?.TRACK_REMOVED ?? 'conference.trackRemoved', onTrackRemoved)
         conf.on?.(confEvents?.CONFERENCE_FAILED ?? 'conference.failed', onConferenceFailed)
 
+        // Lobby (best-effort)
+        const lobbyUserJoinedEvt = confEvents?.LOBBY_USER_JOINED ?? 'conference.lobbyUserJoined'
+        const lobbyUserLeftEvt = confEvents?.LOBBY_USER_LEFT ?? 'conference.lobbyUserLeft'
+        const lobbyAccessGrantedEvt = confEvents?.LOBBY_ACCESS_GRANTED ?? 'conference.lobbyAccessGranted'
+        const lobbyAccessDeniedEvt = confEvents?.LOBBY_ACCESS_DENIED ?? 'conference.lobbyAccessDenied'
+
+        const shouldApprove = (displayName: string) => {
+          if (!params.lobby?.allowNames || params.lobby.allowNames.length === 0) return true
+          return params.lobby.allowNames.includes(displayName)
+        }
+
+        const onLobbyUserJoined = (e: any) => {
+          const id = String(e?.id ?? e?.participantId ?? '')
+          const dn = String(e?.displayName ?? e?.name ?? '').trim() || id
+          if (!id) return
+          lobbyPendingRef.current.set(id, dn)
+          rebuildRemotes()
+          if (params.mode === 'host' && params.lobby?.autoApprove !== false) {
+            if (shouldApprove(dn)) void approveLobbyAccess(id)
+          }
+        }
+        const onLobbyUserLeft = (e: any) => {
+          const id = String(e?.id ?? e?.participantId ?? '')
+          if (!id) return
+          lobbyPendingRef.current.delete(id)
+          rebuildRemotes()
+        }
+        const onLobbyGranted = () => {
+          setLobbyStatus('approved', null)
+        }
+        const onLobbyDenied = () => {
+          setLobbyStatus('denied', '導播拒絕加入')
+        }
+
+        conf.on?.(lobbyUserJoinedEvt, onLobbyUserJoined)
+        conf.on?.(lobbyUserLeftEvt, onLobbyUserLeft)
+        conf.on?.(lobbyAccessGrantedEvt, onLobbyGranted)
+        conf.on?.(lobbyAccessDeniedEvt, onLobbyDenied)
+
         conf.on?.(confEvents?.CONFERENCE_JOINED ?? 'conference.joined', () => {
           if (disposed) return
           setState((s) => ({ ...s, status: 'joined', error: null }))
+          setLobbyStatus('off', null)
+          attemptRef.current = 0
           try {
             conf.setDisplayName?.(params.displayName)
           } catch {
             // noop
           }
           applyReceiverConstraints()
+
+          if (params.mode === 'host' && params.lobby?.enabled) {
+            void enableLobbyOnConference()
+          }
         })
 
         conf.join?.()
 
         // local audio for intercom
-        try {
-          Promise.resolve(
-            JitsiMeetJS.createLocalTracks?.({ devices: ['audio'], audio: true, video: false }),
-          )
-            .then((tracks: any[]) => {
-              if (disposed) return
-              const audioTrack = tracks?.find?.((t: any) => t?.getType?.() === 'audio') ?? null
-              if (!audioTrack) return
-              localAudioRef.current = audioTrack
-              try {
-                audioTrack.mute?.()
-              } catch {
-                // noop
-              }
-              setState((s) => ({ ...s, micMuted: true }))
-              try {
-                conf.addTrack?.(audioTrack)
-              } catch {
-                // noop
-              }
+        if (shouldEnableLocalAudio) {
+          try {
+            Promise.resolve(
+              JitsiMeetJS.createLocalTracks?.({ devices: ['audio'], audio: true, video: false }),
+            )
+              .then((tracks: any[]) => {
+                if (disposed) return
+                const audioTrack = tracks?.find?.((t: any) => t?.getType?.() === 'audio') ?? null
+                if (!audioTrack) return
+                localAudioRef.current = audioTrack
+                try {
+                  audioTrack.mute?.()
+                } catch {
+                  // noop
+                }
+                setState((s) => ({ ...s, micMuted: true }))
+                try {
+                  conf.addTrack?.(audioTrack)
+                } catch {
+                  // noop
+                }
 
-              const onMuteChanged = (e: any) => {
-                const muted = !!e?.muted
-                setState((s) => ({ ...s, micMuted: muted }))
-              }
-              audioTrack.on?.(trackEvents?.TRACK_MUTE_CHANGED ?? 'track.trackMuteChanged', onMuteChanged)
-            })
-            .catch(() => {})
-        } catch {
-          // noop
+                const onMuteChanged = (e: any) => {
+                  const muted = !!e?.muted
+                  setState((s) => ({ ...s, micMuted: muted }))
+                }
+                audioTrack.on?.(trackEvents?.TRACK_MUTE_CHANGED ?? 'track.trackMuteChanged', onMuteChanged)
+              })
+              .catch(() => {})
+          } catch {
+            // noop
+          }
         }
       }
 
@@ -307,7 +472,7 @@ export function useLibJitsiConference(params: {
       void stop()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.enabled, params.room, params.displayName, domain])
+  }, [params.enabled, params.room, params.displayName, params.enableLocalAudio, params.mode, domain, restartSeq])
 
   const api = useMemo(() => {
     return {
@@ -335,6 +500,8 @@ export function useLibJitsiConference(params: {
         receiverHintRef.current = { high: highEndpointIds ?? [], visible: visibleEndpointIds ?? [] }
         applyReceiverConstraints()
       },
+      enableLobby: () => enableLobbyOnConference(),
+      approveLobbyAccess: (id: string) => approveLobbyAccess(id),
     }
   }, [])
 
