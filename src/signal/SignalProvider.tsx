@@ -5,6 +5,8 @@ import {
   type RoutingTableV2,
   type SignalStateV1,
 } from './types'
+import { getFirebaseDatabase, isFirebaseEnabled } from './firebase'
+import { off, onValue, ref, set } from 'firebase/database'
 
 const STORAGE_KEY_PREFIX = 'liveops.signal.v1:'
 const CHANNEL_PREFIX = 'liveops-signal:'
@@ -37,6 +39,9 @@ function writeStoredState(storageKey: string, state: SignalStateV1) {
 
 export function SignalProvider(props: { room: string; children: React.ReactNode }) {
   const storageKey = useMemo(() => `${STORAGE_KEY_PREFIX}${props.room}`, [props.room])
+  const firebaseEnabled = useMemo(() => isFirebaseEnabled(), [])
+  const firebaseDb = useMemo(() => (firebaseEnabled ? getFirebaseDatabase() : null), [firebaseEnabled])
+  const firebasePath = useMemo(() => `liveops/v1/rooms/${props.room}/state`, [props.room])
   const wsUrl = useMemo(() => {
     const explicit = import.meta.env.VITE_SIGNAL_WS_URL as string | undefined
     if (explicit) return explicit
@@ -51,12 +56,13 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
 
   const [wsReady, setWsReady] = useState(false)
   const ws = useMemo(() => {
+    if (firebaseDb) return null
     try {
       return new WebSocket(wsUrl)
     } catch {
       return null
     }
-  }, [wsUrl])
+  }, [firebaseDb, wsUrl])
 
   useEffect(() => {
     if (state.session.opsId === props.room) return
@@ -138,10 +144,65 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
     }
   }, [props.room, state, storageKey, ws])
 
+  useEffect(() => {
+    if (!firebaseDb) return
+
+    const dbRef = ref(firebaseDb, firebasePath)
+    const unsub = onValue(
+      dbRef,
+      (snap) => {
+        const val = snap.val()
+        if (!val) {
+          // Seed initial state for this room if empty.
+          try {
+            set(dbRef, state)
+          } catch {
+            // noop
+          }
+          return
+        }
+        const incoming = normalizeSignalState(props.room, val)
+        if (incoming?.session?.opsId !== props.room) return
+        setState((prev) => {
+          if ((incoming.updatedAt ?? 0) <= (prev.updatedAt ?? 0)) return prev
+          writeStoredState(storageKey, incoming)
+          return incoming
+        })
+      },
+      () => {
+        // ignore firebase listener errors; UI will still work via local fallback
+      },
+    )
+
+    return () => {
+      try {
+        unsub()
+      } catch {
+        // noop
+      }
+      try {
+        off(dbRef)
+      } catch {
+        // noop
+      }
+    }
+  }, [firebaseDb, firebasePath, props.room, state, storageKey])
+
   const commit = useCallback(
     (next: SignalStateV1) => {
       setState(next)
       writeStoredState(storageKey, next)
+
+      if (firebaseDb) {
+        try {
+          set(ref(firebaseDb, firebasePath), next)
+        } catch {
+          // noop
+        }
+        channel?.postMessage({ type: 'state', state: next })
+        return
+      }
+
       if (ws && wsReady) {
         try {
           ws.send(JSON.stringify({ type: 'set', room: props.room, state: next }))
@@ -151,7 +212,7 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
       }
       channel?.postMessage({ type: 'state', state: next })
     },
-    [channel, props.room, storageKey, ws, wsReady],
+    [channel, firebaseDb, firebasePath, props.room, storageKey, ws, wsReady],
   )
 
   useEffect(() => {

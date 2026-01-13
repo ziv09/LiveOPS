@@ -35,6 +35,7 @@ declare global {
       }>
       setAudioInputDevice?: (deviceId: string) => Promise<void>
       setVideoInputDevice?: (deviceId: string) => Promise<void>
+      getIFrame?: () => HTMLIFrameElement
       dispose: () => void
     }
   }

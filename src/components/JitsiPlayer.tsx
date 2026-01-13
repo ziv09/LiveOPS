@@ -77,6 +77,29 @@ export function JitsiPlayer(props: JitsiPlayerProps) {
         },
       })
 
+      // 強化部署站上的裝置權限（特別是跨網域 iframe + 行動裝置）
+      try {
+        const iframe = api.getIFrame?.() as HTMLIFrameElement | undefined
+        if (iframe) {
+          iframe.setAttribute(
+            'allow',
+            [
+              'camera',
+              'microphone',
+              'fullscreen',
+              'display-capture',
+              'autoplay',
+              'clipboard-read',
+              'clipboard-write',
+            ].join('; '),
+          )
+          iframe.setAttribute('allowfullscreen', 'true')
+          iframe.style.border = '0'
+        }
+      } catch {
+        // noop
+      }
+
       apiRef.current = api
       props.onApi?.(api)
     }

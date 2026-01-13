@@ -7,6 +7,45 @@ LiveOPS 是以 `meet.jit.si` External API（IFrame）為核心的戰術通訊與
 1. 安裝依賴：`npm i`
 2. 啟動前端 + 訊號：`npm run dev:all`
 
+## 跨裝置同步（Firebase Realtime Database Signaling）
+
+目前 LiveOPS 的「路由指派/跑馬燈/會議狀態」同步支援兩種模式：
+
+- 本機模式：`BroadcastChannel + localStorage`（同一台電腦多分頁 OK）
+- 跨裝置模式：Firebase Realtime Database（手機/其他電腦可同步）
+
+只要你設定了 `.env.local` 的 Firebase 參數（見 `.env.example`），前端會自動改用 Firebase 做訂閱與寫入，不再連 `ws://localhost:8787`。
+
+### 你需要提供/設定的東西
+
+1. Firebase Console 建立專案
+2. 建立 Realtime Database（Production/Locked 都可以，先用測試規則也行）
+3. 在 Firebase Console > Project settings > General 取得 Web App config，填入：
+   - `VITE_FIREBASE_API_KEY`
+   - `VITE_FIREBASE_AUTH_DOMAIN`
+   - `VITE_FIREBASE_DATABASE_URL`
+   - `VITE_FIREBASE_PROJECT_ID`
+   - `VITE_FIREBASE_STORAGE_BUCKET`
+   - `VITE_FIREBASE_MESSAGING_SENDER_ID`
+   - `VITE_FIREBASE_APP_ID`
+
+### 最簡單的測試規則（先跑通再收斂）
+
+在 Realtime Database Rules（僅測試用）：
+
+```json
+{
+  "rules": {
+    "liveops": {
+      ".read": true,
+      ".write": true
+    }
+  }
+}
+```
+
+跑通之後再改成只允許特定 opsId/token 或加上 Firebase Auth。
+
 ## Google 登入（控制端綁定主持人帳號）
 
 本專案使用 Google Identity Services（GIS）做「控制端綁定主持人帳號」登入，Vite 透過環境變數讀取 Client ID。
@@ -23,6 +62,12 @@ LiveOPS 是以 `meet.jit.si` External API（IFrame）為核心的戰術通訊與
   - 以及你用來讓手機/其他電腦連線的網址（例如 `http://192.168.0.10:5173`）
 
 不需要額外 API Key。
+
+## meet.jit.si 認證與權限（部署站建議）
+
+- 建議一定用 `https`（Firebase Hosting 預設就是），行動裝置的攝影機/麥克風權限會穩很多。
+- 控制端的「Jitsi 認證」彈窗若被擋，請在瀏覽器允許該站彈窗；登入完成後關閉彈窗即可。
+- 若遇到 `membersOnly` / `service-unavailable`，LiveOPS 的 SDK 連線會自動重試；通常等主持人就位或官方伺服器恢復就會進房。
 
 ---
 
