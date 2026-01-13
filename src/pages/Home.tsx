@@ -119,9 +119,11 @@ export function Home() {
                   return
                 }
                 setAuthed('viewer')
+                const baseName = (viewerName || '一般').trim() || '一般'
+                const nameWithSuffix = baseName.endsWith('_監看') ? baseName : `${baseName}_監看`
                 go('/viewer', {
                   ops: trimmedOps,
-                  name: (viewerName || '一般').trim() || '一般',
+                  name: nameWithSuffix,
                 })
               }}
             >

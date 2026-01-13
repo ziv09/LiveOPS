@@ -18,6 +18,7 @@ type SignalContextValue = {
   setCollectorToken: (token: string | null) => void
   setConferenceStarted: (started: boolean, startedBy?: string) => void
   setHostBoundEmail: (email: string | null) => void
+  sync: { mode: 'firebase' | 'ws' | 'local'; connected: boolean; error: string | null }
 }
 
 export const SignalContext = createContext<SignalContextValue | null>(null)
@@ -42,27 +43,34 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
   const firebaseEnabled = useMemo(() => isFirebaseEnabled(), [])
   const firebaseDb = useMemo(() => (firebaseEnabled ? getFirebaseDatabase() : null), [firebaseEnabled])
   const firebasePath = useMemo(() => `liveops/v1/rooms/${props.room}/state`, [props.room])
+  const wsExplicitUrl = useMemo(() => import.meta.env.VITE_SIGNAL_WS_URL as string | undefined, [])
   const wsUrl = useMemo(() => {
-    const explicit = import.meta.env.VITE_SIGNAL_WS_URL as string | undefined
-    if (explicit) return explicit
+    if (wsExplicitUrl) return wsExplicitUrl
     const isHttps = window.location.protocol === 'https:'
     const proto = isHttps ? 'wss' : 'ws'
     return `${proto}://${window.location.hostname}:8787`
-  }, [])
+  }, [wsExplicitUrl])
 
   const [state, setState] = useState<SignalStateV1>(() => {
     return readStoredState(props.room, storageKey) ?? createDefaultSignalState(props.room)
   })
 
   const [wsReady, setWsReady] = useState(false)
+  const [firebaseReady, setFirebaseReady] = useState(false)
+  const [syncError, setSyncError] = useState<string | null>(null)
   const ws = useMemo(() => {
     if (firebaseDb) return null
+    // Production on Firebase Hosting doesn't have a co-located WS server by default.
+    // Only try WS if user explicitly configured it, or we are on localhost.
+    const host = window.location.hostname
+    const isLocalhost = host === 'localhost' || host === '127.0.0.1' || host === '::1'
+    if (!wsExplicitUrl && !isLocalhost) return null
     try {
       return new WebSocket(wsUrl)
     } catch {
       return null
     }
-  }, [firebaseDb, wsUrl])
+  }, [firebaseDb, wsExplicitUrl, wsUrl])
 
   useEffect(() => {
     if (state.session.opsId === props.room) return
@@ -93,6 +101,7 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
 
     const onOpen = () => {
       setWsReady(true)
+      setSyncError(null)
       try {
         ws.send(JSON.stringify({ type: 'subscribe', room: props.room }))
       } catch {
@@ -100,7 +109,10 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
       }
     }
     const onClose = () => setWsReady(false)
-    const onError = () => setWsReady(false)
+    const onError = () => {
+      setWsReady(false)
+      setSyncError('WebSocket 連線失敗（跨裝置同步未啟用）')
+    }
     const onMessage = (evt: MessageEvent) => {
       let msg: any
       try {
@@ -151,6 +163,8 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
     const unsub = onValue(
       dbRef,
       (snap) => {
+        setFirebaseReady(true)
+        setSyncError(null)
         const val = snap.val()
         if (!val) {
           // Seed initial state for this room if empty.
@@ -169,8 +183,9 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
           return incoming
         })
       },
-      () => {
-        // ignore firebase listener errors; UI will still work via local fallback
+      (err) => {
+        setFirebaseReady(false)
+        setSyncError(`Firebase 同步失敗：${String((err as any)?.message ?? err ?? '')}`)
       },
     )
 
@@ -196,8 +211,9 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
       if (firebaseDb) {
         try {
           set(ref(firebaseDb, firebasePath), next)
-        } catch {
-          // noop
+          setSyncError(null)
+        } catch (e) {
+          setSyncError(`Firebase 寫入失敗：${String((e as any)?.message ?? e ?? '')}`)
         }
         channel?.postMessage({ type: 'state', state: next })
         return
@@ -243,8 +259,14 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
   }, [props.room, storageKey])
 
   const value = useMemo<SignalContextValue>(() => {
+    const sync = (() => {
+      if (firebaseDb) return { mode: 'firebase' as const, connected: firebaseReady, error: syncError }
+      if (ws) return { mode: 'ws' as const, connected: wsReady, error: syncError }
+      return { mode: 'local' as const, connected: true, error: syncError }
+    })()
     return {
       state,
+      sync,
       setRouting: (routing) => {
         commit({
           ...state,
@@ -289,7 +311,7 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
         })
       },
     }
-  }, [commit, state])
+  }, [commit, firebaseDb, firebaseReady, state, syncError, ws, wsReady])
 
   return <SignalContext.Provider value={value}>{props.children}</SignalContext.Provider>
 }

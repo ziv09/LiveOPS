@@ -115,11 +115,12 @@ export function ViewerMeet() {
   const [searchParams] = useSearchParams()
 
   const opsId = (searchParams.get('ops') ?? '').trim().toLowerCase()
-  const name = (searchParams.get('name') ?? '').trim() || '一般'
+  const rawName = (searchParams.get('name') ?? '').trim() || '一般'
+  const name = rawName.endsWith('_監看') ? rawName : `${rawName}_監看`
   const authed = isAuthed('viewer')
 
   const isMobile = useMediaQuery('(max-width: 768px)')
-  const { state } = useSignal()
+  const { state, sync } = useSignal()
   const room = useMemo(() => normalizeOpsId(state.session.room || opsId), [opsId, state.session.room])
 
   const [now, setNow] = useState(() => dayjs().format('HH:mm:ss'))
@@ -332,6 +333,16 @@ export function ViewerMeet() {
         >
           登出
         </button>
+        <div className="pointer-events-none hidden items-center gap-2 rounded-xl border border-neutral-800 bg-neutral-950/60 px-3 text-[11px] text-neutral-200 backdrop-blur md:flex">
+          <span className="font-mono">{sync.mode}</span>
+          {sync.mode === 'local' ? (
+            <span className="text-amber-200">本機</span>
+          ) : (
+            <span className={sync.connected ? 'text-emerald-200' : 'text-amber-200'}>
+              {sync.connected ? '已連線' : '連線中'}
+            </span>
+          )}
+        </div>
       </div>
 
       <Split

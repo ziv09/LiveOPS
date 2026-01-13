@@ -179,6 +179,42 @@ export function useLibJitsiConference(params: {
     }
   }
 
+  const denyLobbyAccess = async (id: string) => {
+    const conf = conferenceRef.current
+    if (!conf || !id) return
+    try {
+      if (conf.lobby && typeof conf.lobby.rejectAccess === 'function') {
+        await conf.lobby.rejectAccess(id)
+        return
+      }
+    } catch {
+      // noop
+    }
+    try {
+      if (conf.lobby && typeof conf.lobby.denyAccess === 'function') {
+        await conf.lobby.denyAccess(id)
+        return
+      }
+    } catch {
+      // noop
+    }
+    try {
+      if (typeof conf.rejectLobbyAccess === 'function') {
+        await conf.rejectLobbyAccess(id)
+        return
+      }
+    } catch {
+      // noop
+    }
+    try {
+      if (typeof conf.lobbyRejectAccess === 'function') {
+        await conf.lobbyRejectAccess(id)
+      }
+    } catch {
+      // noop
+    }
+  }
+
   // meet.jit.si 對 SDK 的 lobby/membersOnly 規則會依房間狀態變動；
   // 此處以「membersOnly => 等待主持人就位後自動重連」策略處理，避免依賴 joinLobby API。
 
@@ -306,7 +342,11 @@ export function useLibJitsiConference(params: {
           const err = String(e?.error ?? e?.message ?? e ?? '')
           if (err.includes('membersOnly')) {
             setLobbyStatus('waiting', '導播確認身分中...（等待主持人就位）')
-            scheduleRestart('membersOnly（等待主持人就位）', 1500)
+            // 手動放行模式：讓 SDK 自己留在 lobby room 敲門，等待主持人核准。
+            // 不要在這裡重連，避免把 lobby 流程打斷。
+            if (params.mode === 'host') {
+              scheduleRestart('membersOnly（主持人尚未就位）', 1500)
+            }
             return
           }
           scheduleRestart(`加入會議失敗：${String(e?.message ?? e?.error ?? e ?? '')}`)
@@ -392,6 +432,11 @@ export function useLibJitsiConference(params: {
         }
         const onLobbyGranted = () => {
           setLobbyStatus('approved', null)
+          try {
+            conf.join?.()
+          } catch {
+            // noop
+          }
         }
         const onLobbyDenied = () => {
           setLobbyStatus('denied', '導播拒絕加入')
@@ -502,6 +547,7 @@ export function useLibJitsiConference(params: {
       },
       enableLobby: () => enableLobbyOnConference(),
       approveLobbyAccess: (id: string) => approveLobbyAccess(id),
+      denyLobbyAccess: (id: string) => denyLobbyAccess(id),
     }
   }, [])
 

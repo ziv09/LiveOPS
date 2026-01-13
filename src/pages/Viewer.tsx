@@ -135,7 +135,8 @@ export function Viewer() {
   const [searchParams] = useSearchParams()
 
   const opsId = (searchParams.get('ops') ?? '').trim().toLowerCase()
-  const name = (searchParams.get('name') ?? '').trim() || '一般'
+  const rawName = (searchParams.get('name') ?? '').trim() || '一般'
+  const name = rawName.endsWith('_監看') ? rawName : `${rawName}_監看`
   const authed = isAuthed('viewer')
 
   const isMobile = useMediaQuery('(max-width: 768px)')

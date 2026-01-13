@@ -60,7 +60,7 @@ export function Admin() {
   const opsId = normalizeOpsId(searchParams.get('ops') ?? '')
   const authed = isAuthed('admin')
 
-  const { state, setRouting, setMarquee, setCollectorToken, setConferenceStarted, setHostBoundEmail } = useSignal()
+  const { state, sync, setRouting, setMarquee, setCollectorToken, setConferenceStarted, setHostBoundEmail } = useSignal()
 
   const [opsDraft, setOpsDraft] = useState(() => getNextOpsId().next)
   const [marqueeText, setMarqueeText] = useState(state.marquee.text)
@@ -134,6 +134,7 @@ export function Admin() {
 
   const meetingCode = opsId || normalizeOpsId(state.session.opsId)
   const room = useMemo(() => normalizeOpsId(state.session.room || meetingCode), [meetingCode, state.session.room])
+  const canStartStreaming = hostJoined && hostIsModerator === true
 
   const { state: lobbyHostState, api: lobbyHostApi } = useLibJitsiConference({
     room,
@@ -141,7 +142,7 @@ export function Admin() {
     enabled: !!opsId && authed,
     mode: 'host',
     enableLocalAudio: false,
-    lobby: { enabled: true, autoApprove: true },
+    lobby: { enabled: true, autoApprove: false },
   })
 
   const collectorQrUrl = useMemo(() => {
@@ -251,6 +252,18 @@ export function Admin() {
             <div className="text-xs text-neutral-500">
               會議室：<span className="font-mono">{room}</span>
             </div>
+            <div className="mt-1 text-xs text-neutral-500">
+              同步：
+              <span className="font-mono text-neutral-200">{sync.mode}</span>
+              {sync.mode !== 'local' ? (
+                <span className={sync.connected ? 'ml-2 text-emerald-200' : 'ml-2 text-amber-200'}>
+                  ● {sync.connected ? '已連線' : '連線中'}
+                </span>
+              ) : (
+                <span className="ml-2 text-amber-200">● 本機模式（跨裝置不會同步）</span>
+              )}
+              {sync.error ? <span className="ml-2 text-amber-200">（{sync.error}）</span> : null}
+            </div>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -337,12 +350,17 @@ export function Admin() {
         <div className="mb-4 rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <div className="text-sm font-semibold">會議狀態</div>
+              <div className="text-sm font-semibold">串流狀態</div>
               <div className="text-xs text-neutral-400">
                 {state.conference.started
                   ? '已啟動（採集端/監看端可直接加入）'
                   : '尚未啟動（採集端/監看端會顯示「LiveOPS準備中...」）'}
               </div>
+              {!state.conference.started ? (
+                <div className="mt-2 text-xs text-neutral-400">
+                  開始串流前必須先讓主持人（OPS_MASTER）成功入房並取得 Moderator 權限。
+                </div>
+              ) : null}
               <div className="mt-2 text-[11px] text-neutral-500">
                 Lobby Host（SDK）：{lobbyHostState.status}
                 {lobbyHostState.error ? <span className="text-amber-200">（{lobbyHostState.error}）</span> : null}
@@ -350,20 +368,43 @@ export function Admin() {
                   <span className="text-amber-200"> · 等候室 {lobbyHostState.lobbyPending.length} 人</span>
                 ) : null}
               </div>
-              {lobbyHostState.lobbyPending.length > 0 ? (
-                <div className="mt-2 flex flex-wrap gap-2 text-[11px] text-neutral-300">
-                  {lobbyHostState.lobbyPending.map((p) => (
-                    <button
-                      key={p.id}
-                      className="rounded-lg border border-neutral-800 bg-neutral-950/40 px-2 py-1 hover:border-neutral-600"
-                      onClick={() => lobbyHostApi.approveLobbyAccess(p.id)}
-                      title="手動放行（若自動放行失效）"
-                    >
-                      放行：{p.displayName} · {p.id.slice(0, 6)}
-                    </button>
-                  ))}
+
+              <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-950/30 p-3">
+                <div className="text-xs font-semibold text-neutral-200">等候室名單（手動審核）</div>
+                <div className="mt-1 text-[11px] text-neutral-400">
+                  當採集端/一般監看端被擋在等候室時，會出現在這裡；請逐一按「同意」或「拒絕」。
                 </div>
-              ) : null}
+                {lobbyHostState.lobbyPending.length === 0 ? (
+                  <div className="mt-2 text-[11px] text-neutral-500">目前等候室 0 人</div>
+                ) : (
+                  <div className="mt-2 flex flex-col gap-2 text-[11px] text-neutral-300">
+                    {lobbyHostState.lobbyPending.map((p) => (
+                      <div
+                        key={p.id}
+                        className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-800 bg-neutral-950/40 px-2 py-1"
+                      >
+                        <div className="min-w-0 max-w-[420px] truncate">
+                          {p.displayName} · {p.id.slice(0, 8)}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <button
+                            className="rounded-md border border-emerald-900/60 bg-emerald-950/40 px-2 py-0.5 text-emerald-200 hover:border-emerald-700"
+                            onClick={() => lobbyHostApi.approveLobbyAccess(p.id)}
+                          >
+                            同意
+                          </button>
+                          <button
+                            className="rounded-md border border-rose-900/60 bg-rose-950/40 px-2 py-0.5 text-rose-200 hover:border-rose-700"
+                            onClick={() => lobbyHostApi.denyLobbyAccess(p.id)}
+                          >
+                            拒絕
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
             </div>
             <div className="flex items-center gap-2">
               <button
@@ -372,14 +413,19 @@ export function Admin() {
                     ? 'h-10 rounded-lg border border-neutral-700 bg-neutral-900/30 px-4 text-sm font-semibold text-neutral-100 hover:border-neutral-500'
                     : 'h-10 rounded-lg bg-emerald-300 px-4 text-sm font-semibold text-neutral-950 hover:bg-emerald-200'
                 }
+                disabled={!state.conference.started && !canStartStreaming}
                 onClick={() => {
                   if (!state.conference.started) {
+                    if (!canStartStreaming) {
+                      setHostError('請先讓主持人入房並取得 Moderator 權限後，再開始串流。')
+                      return
+                    }
                     if (!state.host.boundGoogleEmail) {
-                      setHostError('請先綁定主持人 Google 帳號後再啟動會議。')
+                      setHostError('請先綁定主持人 Google 帳號後再開始串流。')
                       return
                     }
                     if (!googleUser?.email) {
-                      setHostError('請先以 Google 登入後再啟動會議。')
+                      setHostError('請先以 Google 登入後再開始串流。')
                       return
                     }
                     if (googleUser.email !== state.host.boundGoogleEmail) {
@@ -393,7 +439,7 @@ export function Admin() {
                   setConferenceStarted(false)
                 }}
               >
-                {state.conference.started ? '結束會議（停止廣播）' : '啟動會議'}
+                {state.conference.started ? '停止串流（停止廣播）' : '開始串流'}
               </button>
               <button
                 className="h-10 rounded-lg border border-neutral-700 bg-neutral-900/30 px-4 text-sm font-semibold text-neutral-100 hover:border-neutral-500"
@@ -696,6 +742,49 @@ export function Admin() {
                   清除
                 </button>
               </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4">
+            <div className="mb-2 text-sm font-semibold">等候室名單（手動審核）</div>
+            <div className="text-xs text-neutral-400">
+              若採集端/監看端顯示「導播確認身分中...」，代表正在等候室等待你審核。
+            </div>
+            <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-950/30 p-3 text-[11px] text-neutral-200">
+              {lobbyHostState.lobbyPending.length === 0 ? (
+                <div className="text-neutral-500">目前等候室 0 人</div>
+              ) : (
+                <div className="flex flex-col gap-2">
+                  {lobbyHostState.lobbyPending.map((p) => (
+                    <div
+                      key={p.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-800 bg-neutral-950/40 px-2 py-1"
+                    >
+                      <div className="min-w-0 max-w-[260px] truncate">
+                        {p.displayName} · {p.id.slice(0, 8)}
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          className="rounded-md border border-emerald-900/60 bg-emerald-950/40 px-2 py-0.5 text-emerald-200 hover:border-emerald-700"
+                          onClick={() => lobbyHostApi.approveLobbyAccess(p.id)}
+                        >
+                          同意
+                        </button>
+                        <button
+                          className="rounded-md border border-rose-900/60 bg-rose-950/40 px-2 py-0.5 text-rose-200 hover:border-rose-700"
+                          onClick={() => lobbyHostApi.denyLobbyAccess(p.id)}
+                        >
+                          拒絕
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            <div className="mt-2 text-[11px] text-neutral-500">
+              Lobby Host（SDK）：{lobbyHostState.status}
+              {lobbyHostState.error ? <span className="text-amber-200">（{lobbyHostState.error}）</span> : null}
             </div>
           </div>
 
