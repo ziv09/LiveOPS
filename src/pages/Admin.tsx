@@ -11,7 +11,6 @@ import type { RoutingSlotV1, RoutingSourceV1 } from '../signal/types'
 import { createCollectorToken } from '../utils/token'
 
 type ParticipantInfo = { participantId: string; displayName?: string }
-type VideoDevice = { deviceId: string; label: string }
 
 function getNextOpsId() {
   const key = 'liveops.ops.counter'
@@ -22,13 +21,15 @@ function getNextOpsId() {
 
 function encodeSource(source: RoutingSourceV1): string {
   if (source.type === 'none') return 'none'
-  if (source.type === 'localDevice') return `dev:${source.deviceId}`
-  if (source.type === 'collectorParticipant') return `pid:${source.participantId}`
+  if (source.type === 'participantName') return `name:${encodeURIComponent(source.name)}`
+  if (source.type === 'collectorParticipant') return `pid:${source.participantId}` // legacy
+  if (source.type === 'localDevice') return `dev:${source.deviceId}` // legacy
   return 'none'
 }
 
 function decodeSource(value: string): RoutingSourceV1 {
   if (!value || value === 'none') return { type: 'none' }
+  if (value.startsWith('name:')) return { type: 'participantName', name: decodeURIComponent(value.slice(5)) }
   if (value.startsWith('dev:')) return { type: 'localDevice', deviceId: value.slice(4) }
   if (value.startsWith('pid:')) return { type: 'collectorParticipant', participantId: value.slice(4) }
   return { type: 'none' }
@@ -40,57 +41,8 @@ function updateSlot(slots: RoutingSlotV1[], index: number, patch: Partial<Routin
   return next
 }
 
-function uniq<T>(arr: T[]) {
-  return Array.from(new Set(arr))
-}
-
 function isViewerClientName(name: string) {
   return name.includes('-Intercom') || name.includes('-MTV') || name.includes('-SRC-') || name.includes('-Roster')
-}
-
-function LocalDeviceCollectors(props: {
-  enabled: boolean
-  room: string
-  devices: VideoDevice[]
-  selectedDeviceIds: string[]
-}) {
-  const list = useMemo(() => {
-    const devicesById = new Map(props.devices.map((d) => [d.deviceId, d]))
-    return uniq(props.selectedDeviceIds)
-      .filter((id) => id)
-      .map((id) => ({ deviceId: id, label: devicesById.get(id)?.label ?? '' }))
-  }, [props.devices, props.selectedDeviceIds])
-
-  if (!props.enabled) return null
-  if (list.length === 0) return null
-
-  return (
-    <div className="fixed left-0 top-0 h-px w-px overflow-hidden opacity-0">
-      {list.map((d) => (
-        <JitsiPlayer
-          key={d.deviceId}
-          room={props.room}
-          displayName={`DEV:${d.deviceId} ${d.label || '本機來源'}`}
-          hidden
-          onApi={(api) => {
-            if (!api) return
-            setAllParticipantVolume(api, 0)
-            api.setVideoInputDevice?.(d.deviceId).catch?.(() => {})
-          }}
-          configOverwrite={{
-            startWithAudioMuted: true,
-            startWithVideoMuted: false,
-            prejoinPageEnabled: false,
-            startConferenceOnEnter: true,
-            disableDeepLinking: true,
-          }}
-          interfaceConfigOverwrite={{
-            TOOLBAR_BUTTONS: [],
-          }}
-        />
-      ))}
-    </div>
-  )
 }
 
 export function Admin() {
@@ -113,7 +65,6 @@ export function Admin() {
   const [authPopupOpen, setAuthPopupOpen] = useState(false)
   const [authHint, setAuthHint] = useState<string | null>(null)
 
-  const [videoDevices, setVideoDevices] = useState<VideoDevice[]>([])
   const [participants, setParticipants] = useState<ParticipantInfo[]>([])
 
   const roomApiRef = useRef<any | null>(null)
@@ -159,24 +110,6 @@ export function Admin() {
     }, 500)
   }
 
-  const refreshVideoDevices = async () => {
-    try {
-      const list = await navigator.mediaDevices.enumerateDevices()
-      const v = list
-        .filter((d) => d.kind === 'videoinput')
-        .map((d) => ({ deviceId: d.deviceId, label: d.label }))
-      setVideoDevices(v)
-    } catch {
-      setVideoDevices([])
-    }
-  }
-
-  useEffect(() => {
-    if (!opsId) return
-    refreshVideoDevices()
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [opsId])
-
   const refreshParticipants = async () => {
     const api = roomApiRef.current
     if (!api) return
@@ -198,23 +131,25 @@ export function Admin() {
     return `${shareBaseUrl}/collector?token=${token}`
   }, [shareBaseUrl, state.collector.token])
 
-  const selectedLocalDeviceIds = useMemo(() => {
-    const all = [...state.routing.mtv, ...state.routing.source]
-      .map((s) => (s.source.type === 'localDevice' ? s.source.deviceId : ''))
-      .filter(Boolean)
-    return uniq(all)
-  }, [state.routing.mtv, state.routing.source])
-
-  const remoteCandidates = useMemo(() => {
+  const sourceCandidates = useMemo(() => {
     return participants.filter((p) => {
       const name = p.displayName ?? ''
-      if (!name) return true
+      if (!name) return false
       if (name === 'OPS_MASTER') return false
-      if (name.startsWith('DEV:')) return false
       if (isViewerClientName(name)) return false
       return true
     })
   }, [participants])
+
+  const candidateNameCounts = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const p of sourceCandidates) {
+      const n = (p.displayName ?? '').trim()
+      if (!n) continue
+      m.set(n, (m.get(n) ?? 0) + 1)
+    }
+    return m
+  }, [sourceCandidates])
 
   if (!authed) {
     return (
@@ -520,24 +455,15 @@ export function Admin() {
               <div>
                 <div className="text-sm font-semibold">路由指派（來源 + 名稱）</div>
                 <div className="text-xs text-neutral-400">
-                  每個下拉選單會列出「本機影像設備」以及「遠端採集來源」；可重複選取同一設備。
+                  控制台只負責「把會議室內的來源（參與者）」指派到格子；影像來源請一律用「訊號採集端」加入會議室後再回來指派。
                 </div>
+                {Array.from(candidateNameCounts.values()).some((c) => c > 1) ? (
+                  <div className="mt-1 text-xs text-amber-200">
+                    注意：偵測到重複的來源名稱，建議每個採集端名稱保持唯一，避免指派不穩定。
+                  </div>
+                ) : null}
               </div>
               <div className="flex items-center gap-2">
-                <button
-                  className="h-10 rounded-lg border border-neutral-700 bg-neutral-900/30 px-3 text-sm font-semibold hover:border-neutral-500"
-                  onClick={async () => {
-                    try {
-                      const stream = await navigator.mediaDevices.getUserMedia({ video: true })
-                      for (const track of stream.getTracks()) track.stop()
-                    } catch {
-                      // noop
-                    }
-                    await refreshVideoDevices()
-                  }}
-                >
-                  取得鏡頭授權 / 更新設備
-                </button>
                 <button
                   className="h-10 rounded-lg border border-neutral-700 bg-neutral-900/30 px-3 text-sm font-semibold hover:border-neutral-500"
                   onClick={refreshParticipants}
@@ -580,20 +506,24 @@ export function Admin() {
                           }}
                           className="h-10 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
                         >
+                          {(() => {
+                            const v = encodeSource(slot.source)
+                            if (v === 'none') return null
+                            if (v.startsWith('pid:')) return <option value={v}>（舊版來源）{v.slice(4, 14)}</option>
+                            if (v.startsWith('dev:')) return <option value={v}>（舊版來源）{v.slice(4, 20)}</option>
+                            return null
+                          })()}
                           <option value="none">（未指派）</option>
-                          <optgroup label="本機影像設備">
-                            {videoDevices.map((d) => (
-                              <option key={d.deviceId} value={`dev:${d.deviceId}`}>
-                                {d.label || d.deviceId}
-                              </option>
-                            ))}
-                          </optgroup>
-                  <optgroup label="遠端採集來源（同一會議室）">
-                            {remoteCandidates.map((p) => (
-                              <option key={p.participantId} value={`pid:${p.participantId}`}>
-                                {p.displayName || p.participantId.slice(0, 10)}
-                              </option>
-                            ))}
+                          <optgroup label="會議室來源（採集端加入）">
+                            {sourceCandidates.map((p) => {
+                              const n = (p.displayName ?? '').trim()
+                              const dup = (candidateNameCounts.get(n) ?? 0) > 1
+                              return (
+                                <option key={p.participantId} value={`name:${encodeURIComponent(n)}`}>
+                                  {dup ? `${n}（重複）` : n} · {p.participantId.slice(0, 8)}
+                                </option>
+                              )
+                            })}
                           </optgroup>
                         </select>
                       </label>
@@ -627,27 +557,40 @@ export function Admin() {
                         <select
                           value={encodeSource(slot.source)}
                           onChange={(e) => {
+                            const nextSource = decodeSource(e.target.value)
+                            const defaultTitle = `來源 ${idx + 1}`
+                            const currentTitle = (slot.title ?? '').trim()
+                            const prevAutoTitle =
+                              slot.source.type === 'participantName' ? slot.source.name.trim() : ''
+                            const shouldAutoRename =
+                              !currentTitle || currentTitle === defaultTitle || (prevAutoTitle && currentTitle === prevAutoTitle)
+                            const nextTitle =
+                              shouldAutoRename && nextSource.type === 'participantName' ? nextSource.name : slot.title
                             setRouting({
                               ...state.routing,
-                              source: updateSlot(state.routing.source, idx, { source: decodeSource(e.target.value) }),
+                              source: updateSlot(state.routing.source, idx, { source: nextSource, title: nextTitle }),
                             })
                           }}
                           className="h-10 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
                         >
+                          {(() => {
+                            const v = encodeSource(slot.source)
+                            if (v === 'none') return null
+                            if (v.startsWith('pid:')) return <option value={v}>（舊版來源）{v.slice(4, 14)}</option>
+                            if (v.startsWith('dev:')) return <option value={v}>（舊版來源）{v.slice(4, 20)}</option>
+                            return null
+                          })()}
                           <option value="none">（未指派）</option>
-                          <optgroup label="本機影像設備">
-                            {videoDevices.map((d) => (
-                              <option key={d.deviceId} value={`dev:${d.deviceId}`}>
-                                {d.label || d.deviceId}
-                              </option>
-                            ))}
-                          </optgroup>
-                          <optgroup label="遠端採集來源（同一會議室）">
-                            {remoteCandidates.map((p) => (
-                              <option key={p.participantId} value={`pid:${p.participantId}`}>
-                                {p.displayName || p.participantId.slice(0, 10)}
-                              </option>
-                            ))}
+                          <optgroup label="會議室來源（採集端加入）">
+                            {sourceCandidates.map((p) => {
+                              const n = (p.displayName ?? '').trim()
+                              const dup = (candidateNameCounts.get(n) ?? 0) > 1
+                              return (
+                                <option key={p.participantId} value={`name:${encodeURIComponent(n)}`}>
+                                  {dup ? `${n}（重複）` : n} · {p.participantId.slice(0, 8)}
+                                </option>
+                              )
+                            })}
                           </optgroup>
                         </select>
                       </label>
@@ -769,14 +712,6 @@ export function Admin() {
           }}
         />
       </div>
-
-      {/* 本機影像設備採集器（依路由選取自動加入採集會議室） */}
-      <LocalDeviceCollectors
-        enabled={true}
-        room={state.session.room}
-        devices={videoDevices}
-        selectedDeviceIds={selectedLocalDeviceIds}
-      />
     </div>
   )
 }

@@ -6,8 +6,11 @@ export type OpsSessionV1 = {
 
 export type RoutingSourceV1 =
   | { type: 'none' }
-  | { type: 'localDevice'; deviceId: string }
+  // 新版：以參與者顯示名稱作為來源（來源重連後仍可匹配）
+  | { type: 'participantName'; name: string }
+  // 相容舊版（仍會被 normalize / upgrade 支援）
   | { type: 'collectorParticipant'; participantId: string }
+  | { type: 'localDevice'; deviceId: string }
 
 export type RoutingSlotV1 = {
   title: string
@@ -72,8 +75,9 @@ export function createDefaultSignalState(opsId: string): SignalStateV1 {
 function isRoutingSourceV1(x: any): x is RoutingSourceV1 {
   if (!x || typeof x !== 'object') return false
   if (x.type === 'none') return true
-  if (x.type === 'localDevice') return typeof x.deviceId === 'string' && x.deviceId.length > 0
+  if (x.type === 'participantName') return typeof x.name === 'string' && x.name.trim().length > 0
   if (x.type === 'collectorParticipant') return typeof x.participantId === 'string' && x.participantId.length > 0
+  if (x.type === 'localDevice') return typeof x.deviceId === 'string' && x.deviceId.length > 0
   return false
 }
 

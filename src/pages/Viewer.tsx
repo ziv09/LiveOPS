@@ -42,6 +42,12 @@ function resolveSource(
   participants: ParticipantInfo[],
 ): string | null {
   if (source.type === 'none') return null
+  if (source.type === 'participantName') {
+    const target = source.name.trim()
+    if (!target) return null
+    const hit = participants.find((p) => (p.displayName ?? '').trim() === target)
+    return hit?.participantId ?? null
+  }
   if (source.type === 'collectorParticipant') {
     const hit = participants.some((p) => p.participantId === source.participantId)
     return hit ? source.participantId : null
@@ -70,14 +76,6 @@ function VideoTile(props: {
     focusParticipant(apiRef.current, props.targetParticipantId)
   }, [props.targetParticipantId])
 
-  useEffect(() => {
-    const api = apiRef.current
-    if (!api) return
-    const onJoined = () => focusParticipant(api, latestTarget.current)
-    api.addListener?.('videoConferenceJoined', onJoined)
-    return () => api.removeListener?.('videoConferenceJoined', onJoined)
-  }, [apiRef.current])
-
   return (
     <div
       className={
@@ -94,11 +92,14 @@ function VideoTile(props: {
             apiRef.current = api
             if (!api) return
             setAllParticipantVolume(api, 0)
+            focusParticipant(api, latestTarget.current)
           }}
           configOverwrite={{
             startWithAudioMuted: true,
             startWithVideoMuted: true,
             disableInitialGUM: true,
+            constraints: { video: false, audio: false },
+            disableTileView: true,
             prejoinPageEnabled: false,
             prejoinConfig: { enabled: false },
             disableDeepLinking: true,
@@ -107,6 +108,9 @@ function VideoTile(props: {
           }}
           interfaceConfigOverwrite={{
             TOOLBAR_BUTTONS: [],
+            SETTINGS_SECTIONS: [],
+            FILM_STRIP_MAX_HEIGHT: 0,
+            VERTICAL_FILMSTRIP: false,
           }}
         />
       ) : (

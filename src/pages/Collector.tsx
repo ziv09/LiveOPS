@@ -12,16 +12,15 @@ export function Collector() {
   const token = searchParams.get('token')
   const parsed = useMemo(() => (token ? parseCollectorToken(token) : null), [token])
 
-  const opsFromQuery = (searchParams.get('ops') ?? '').trim().toUpperCase()
-  const opsId = (parsed?.opsId ?? opsFromQuery).trim().toUpperCase()
+  const opsId = (parsed?.opsId ?? '').trim().toUpperCase()
   const nameFromQuery = (searchParams.get('name') ?? '').trim()
-  const displayName = (parsed?.name ?? nameFromQuery ?? '').trim() || 'Collector'
+  const displayName = (nameFromQuery || parsed?.name || '').trim() || 'Collector'
+  const join = (searchParams.get('join') ?? '').trim() === '1'
 
   const { state } = useSignal()
   const apiRef = useRef<any | null>(null)
 
   const [connected, setConnected] = useState(false)
-  const [opsDraft, setOpsDraft] = useState(opsId || '')
   const [nameDraft, setNameDraft] = useState(displayName === 'Collector' ? '' : displayName)
 
   const wakeLockRef = useRef<any | null>(null)
@@ -48,48 +47,78 @@ export function Collector() {
     }
   }, [])
 
-  if (!opsId) {
+  if (!token || !opsId) {
     return (
       <div className="grid min-h-full place-items-center bg-neutral-950 p-6 text-neutral-100">
         <div className="w-full max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/30 p-5">
           <div className="text-lg font-semibold">訊號採集（Collector）</div>
-          <div className="mt-2 text-sm text-neutral-300">請輸入控制端提供的會議碼（OPSxx）後進入採集會議室。</div>
-          <label className="mt-4 grid gap-2">
-            <div className="text-sm text-neutral-200">會議碼</div>
-            <input
-              value={opsDraft}
-              onChange={(e) => setOpsDraft(e.target.value.toUpperCase())}
-              className="h-11 rounded-lg border border-neutral-700 bg-neutral-950/50 px-3 uppercase outline-none ring-0 focus:border-neutral-500"
-              placeholder="OPS01"
-            />
-          </label>
-          <label className="mt-3 grid gap-2">
-            <div className="text-sm text-neutral-200">名稱（選填）</div>
-            <input
-              value={nameDraft}
-              onChange={(e) => setNameDraft(e.target.value)}
-              className="h-11 rounded-lg border border-neutral-700 bg-neutral-950/50 px-3 outline-none ring-0 focus:border-neutral-500"
-              placeholder="例如：手機 A"
-            />
-          </label>
+          <div className="mt-2 text-sm text-neutral-300">
+            請使用控制端「啟動會議」後產生的採集連結或 QR Code 進入。
+          </div>
           <div className="mt-4 flex gap-2">
             <button
               className="h-10 flex-1 rounded-lg bg-neutral-100 px-3 text-sm font-semibold text-neutral-950 hover:bg-white"
-              onClick={() => {
-                const trimmed = opsDraft.trim().toUpperCase()
-                if (!trimmed) return
-                const next: Record<string, string> = { ops: trimmed }
-                if (nameDraft.trim()) next.name = nameDraft.trim()
-                setSearchParams(next)
-              }}
+              onClick={() => navigate('/')}
             >
-              進入採集
+              返回首頁
             </button>
             <button
               className="h-10 rounded-lg border border-neutral-700 bg-neutral-900/30 px-3 text-sm font-semibold hover:border-neutral-500"
               onClick={() => navigate('/')}
             >
               返回
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (!join) {
+    return (
+      <div className="grid min-h-full place-items-center bg-neutral-950 p-6 text-neutral-100">
+        <div className="w-full max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/30 p-5">
+          <div className="text-lg font-semibold">訊號採集（Collector）</div>
+          <div className="mt-2 text-sm text-neutral-300">先設定來源名稱與影像來源，確認後才會加入會議室。</div>
+
+          <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-950/30 p-3">
+            <div className="text-xs text-neutral-500">
+              會議碼：<span className="font-mono text-neutral-200">{opsId}</span>
+            </div>
+
+            <label className="mt-3 grid gap-2">
+              <div className="text-sm text-neutral-200">來源名稱（必填）</div>
+              <input
+                value={nameDraft}
+                onChange={(e) => setNameDraft(e.target.value)}
+                className="h-11 rounded-lg border border-neutral-700 bg-neutral-950/50 px-3 outline-none ring-0 focus:border-neutral-500"
+                placeholder="例如：OBS 主畫面 / 手機 A / Camera 1"
+              />
+            </label>
+
+            <div className="mt-2 text-xs text-neutral-500">
+              下一步會進入 Jitsi 原生的「加入前設定」頁面，請在那裡選擇要使用的攝影機來源（例如 OBS Virtual Camera）。
+            </div>
+          </div>
+
+          <div className="mt-4 flex gap-2">
+            <button
+              className="h-10 flex-1 rounded-lg bg-neutral-100 px-3 text-sm font-semibold text-neutral-950 hover:bg-white disabled:opacity-50"
+              disabled={!nameDraft.trim()}
+              onClick={() => {
+                const n = nameDraft.trim()
+                if (!n) return
+                const next: Record<string, string> = { token, name: n, join: '1' }
+                setSearchParams(next)
+              }}
+            >
+              開始採集
+            </button>
+            <button
+              className="h-10 rounded-lg border border-neutral-700 bg-neutral-900/30 px-3 text-sm font-semibold hover:border-neutral-500"
+              onClick={() => navigate('/')}
+            >
+              取消
             </button>
           </div>
         </div>
@@ -116,14 +145,17 @@ export function Collector() {
           startWithAudioMuted: true,
           startWithVideoMuted: false,
           disableInitialGUM: false,
-          prejoinPageEnabled: false,
+          disableSelfView: false,
+          prejoinPageEnabled: true,
+          prejoinConfig: { enabled: true },
           disableDeepLinking: true,
           startConferenceOnEnter: true,
           requireDisplayName: false,
-          prejoinConfig: { enabled: false },
         }}
         interfaceConfigOverwrite={{
-          TOOLBAR_BUTTONS: [],
+          // 允許在 Jitsi 原生加入前設定頁面切換攝影機/麥克風
+          SETTINGS_SECTIONS: ['devices'],
+          TOOLBAR_BUTTONS: ['settings'],
         }}
       />
 

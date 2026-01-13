@@ -127,12 +127,6 @@ export function Home() {
               登入
             </button>
 
-            <button
-              className="h-11 rounded-lg border border-neutral-700 bg-neutral-950/40 text-sm font-semibold text-neutral-100 hover:border-neutral-500"
-              onClick={() => go('/collector', {})}
-            >
-              訊號採集（Collector）
-            </button>
           </div>
 
           {error ? (
@@ -142,7 +136,7 @@ export function Home() {
           ) : null}
 
           <div className="mt-6 text-xs leading-relaxed text-neutral-400">
-            提示：控制端登入後會生成會議碼（OPSxx）與 QR Code；採集端可輸入會議碼或掃描 QR 直接進入。
+            提示：採集端請一律使用控制端「啟動會議」後產生的採集連結或 QR Code 進入。
           </div>
         </div>
       </div>

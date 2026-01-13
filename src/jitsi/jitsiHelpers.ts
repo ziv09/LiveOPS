@@ -1,5 +1,12 @@
 export function focusParticipant(api: any, participantId: string | null | undefined) {
   if (!api || !participantId) return
+
+  // 強制關閉 tile view，避免顯示整個會議室格狀畫面
+  try {
+    api.executeCommand?.('setTileView', false)
+  } catch {
+    // noop
+  }
   try {
     api.executeCommand('setLargeVideoParticipant', participantId)
     return
@@ -45,4 +52,3 @@ export function setAllParticipantVolume(api: any, volume: number) {
     }
   }
 }
-
