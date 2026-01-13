@@ -209,7 +209,7 @@ export function ViewerMeet() {
           <img
             src="/vite-full-white.svg"
             alt="LiveOPS"
-            className="w-56 max-w-[70vw] opacity-90 md:w-72"
+            className="w-504 max-w-[90vw] opacity-90 md:w-72"
             draggable={false}
           />
         </div>

@@ -97,6 +97,15 @@ export function Admin() {
   const meetingCode = opsId || normalizeOpsId(state.session.opsId)
   const room = useMemo(() => normalizeOpsId(state.session.room || meetingCode), [meetingCode, state.session.room])
 
+  const openJitsiAuthPopup = () => {
+    const domain = ((import.meta.env.VITE_JITSI_DOMAIN as string | undefined) ?? 'meet.jit.si')
+      .replace(/^https?:\/\//, '')
+      .replace(/\/+$/, '')
+    const roomName = encodeURIComponent(room || 'ops01')
+    const url = `https://${domain}/${roomName}`
+    window.open(url, '_blank', 'noopener,noreferrer')
+  }
+
   const { state: adminConfState, api: adminConfApi } = useLibJitsiConference({
     room,
     displayName: 'OPS_ADMIN_SDK',
@@ -257,7 +266,8 @@ export function Admin() {
               </div>
               {!state.conference.started ? (
                 <div className="mt-2 text-xs text-neutral-400">
-                  開始串流前必須先點「開啟原生會議室（設定主持人）」並成功進入會議室（代表主持人已就位）。
+                  「開始串流」只控制 LiveOPS 的節目輸出（Viewer 何時切到格子畫面），不再綁主持人判斷。
+                  若採集端/監看端加入時遇到 `membersOnly` 或被擋在等候室，請點右側「開啟原生會議室」用原生流程登入成為主持人，並在下方等候室名單手動放行。
                 </div>
               ) : null}
               <div className="mt-2 text-[11px] text-neutral-500">
@@ -288,13 +298,13 @@ export function Admin() {
               >
                 {state.conference.started ? '停止串流（停止廣播）' : '開始串流'}
               </button>
-              {/* <button
+              <button
                 className="h-10 rounded-lg border border-neutral-700 bg-neutral-900/30 px-4 text-sm font-semibold text-neutral-100 hover:border-neutral-500"
                 onClick={openJitsiAuthPopup}
-                title="開啟原生會議室（meet.jit.si），在那裡把 OPS_ADMIN_SDK 設為主持人（Moderator）或做其他原生設定"
+                title="開啟原生 meet.jit.si 房間（可登入成為主持人，以便放行等候室成員）"
               >
-                開啟原生會議室（設定主持人）
-              </button> */}
+                開啟原生會議室（meet.jit.si）
+              </button>
               <button
                 className="h-10 rounded-lg border border-neutral-800 bg-neutral-900/30 px-3 text-sm hover:border-neutral-600"
                 onClick={() => setSearchParams({ ops: meetingCode })}
