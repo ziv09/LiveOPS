@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { setAuthed, verifyAdminPassword, verifyViewerPassword } from '../auth/auth'
+import { normalizeOpsId } from '../utils/ops'
 
 export function Home() {
   const navigate = useNavigate()
@@ -65,15 +66,15 @@ export function Home() {
 
             {role === 'viewer' ? (
               <label className="grid gap-2">
-                <div className="text-sm text-neutral-200">會議碼（例如 OPS01）</div>
+                <div className="text-sm text-neutral-200">會議碼（例如 ops01）</div>
                 <input
                   value={opsId}
                   onChange={(e) => {
-                    setOpsId(e.target.value.toUpperCase())
+                    setOpsId(normalizeOpsId(e.target.value))
                     setError(null)
                   }}
-                  className="h-11 rounded-lg border border-neutral-700 bg-neutral-950/50 px-3 uppercase outline-none ring-0 focus:border-neutral-500"
-                  placeholder="OPS01"
+                  className="h-11 rounded-lg border border-neutral-700 bg-neutral-950/50 px-3 lowercase outline-none ring-0 focus:border-neutral-500"
+                  placeholder="ops01"
                 />
               </label>
             ) : (
@@ -112,9 +113,9 @@ export function Home() {
                   setError('一般監看密碼錯誤。')
                   return
                 }
-                const trimmedOps = opsId.trim().toUpperCase()
+                const trimmedOps = normalizeOpsId(opsId)
                 if (!trimmedOps) {
-                  setError('請輸入會議碼（例如 OPS01）。')
+                  setError('請輸入會議碼（例如 ops01）。')
                   return
                 }
                 setAuthed('viewer')

@@ -25,9 +25,10 @@ function base64UrlDecode(input: string): string {
 }
 
 export function createCollectorToken(params: { opsId: string; name?: string }): string {
+  const opsId = String(params.opsId ?? '').trim().toLowerCase()
   const payload: CollectorTokenV2 = {
     v: 2,
-    opsId: params.opsId,
+    opsId,
     name: params.name,
     issuedAt: Date.now(),
   }

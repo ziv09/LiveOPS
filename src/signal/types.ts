@@ -41,7 +41,9 @@ export const DEFAULT_SLOTS = {
 } as const
 
 export function getDefaultRoom(opsId: string) {
-  return opsId.trim() || 'OPS01'
+  const raw = String(opsId ?? '').trim().toLowerCase()
+  const safe = raw.replace(/[^a-z0-9_-]/g, '')
+  return safe || 'ops01'
 }
 
 export function createDefaultSignalState(opsId: string): SignalStateV1 {
@@ -131,13 +133,15 @@ export function normalizeSignalState(opsId: string, state: any): SignalStateV1 {
   const session = (() => {
     const s = state.session
     if (s?.v === 1 && typeof s.opsId === 'string') {
+      const normalizedOps = getDefaultRoom(opsId)
       const fallbackRoom = getDefaultRoom(opsId)
+      const normalizedRoom =
+        (typeof s.room === 'string' && s.room ? getDefaultRoom(s.room) : '') || fallbackRoom
       return {
         v: 1,
-        opsId,
+        opsId: normalizedOps,
         room:
-          (typeof s.room === 'string' && s.room) ||
-          fallbackRoom,
+          normalizedRoom,
       } satisfies OpsSessionV1
     }
     return base.session

@@ -12,7 +12,7 @@ export function Collector() {
   const token = searchParams.get('token')
   const parsed = useMemo(() => (token ? parseCollectorToken(token) : null), [token])
 
-  const opsId = (parsed?.opsId ?? '').trim().toUpperCase()
+  const opsId = (parsed?.opsId ?? '').trim().toLowerCase()
   const nameFromQuery = (searchParams.get('name') ?? '').trim()
   const displayName = (nameFromQuery || parsed?.name || '').trim() || 'Collector'
   const join = (searchParams.get('join') ?? '').trim() === '1'

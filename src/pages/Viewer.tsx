@@ -134,7 +134,7 @@ export function Viewer() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
 
-  const opsId = (searchParams.get('ops') ?? '').trim().toUpperCase()
+  const opsId = (searchParams.get('ops') ?? '').trim().toLowerCase()
   const name = (searchParams.get('name') ?? '').trim() || '一般'
   const authed = isAuthed('viewer')
 

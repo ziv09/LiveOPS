@@ -8,6 +8,7 @@ import { GoogleSignInButton } from '../components/GoogleSignInButton'
 import { setAllParticipantVolume } from '../jitsi/jitsiHelpers'
 import { useSignal } from '../signal/useSignal'
 import type { RoutingSlotV1, RoutingSourceV1 } from '../signal/types'
+import { normalizeOpsId } from '../utils/ops'
 import { createCollectorToken } from '../utils/token'
 
 type ParticipantInfo = { participantId: string; displayName?: string }
@@ -15,7 +16,7 @@ type ParticipantInfo = { participantId: string; displayName?: string }
 function getNextOpsId() {
   const key = 'liveops.ops.counter'
   const n = Math.max(1, Number.parseInt(localStorage.getItem(key) ?? '1', 10) || 1)
-  const next = `OPS${String(n).padStart(2, '0')}`
+  const next = `ops${String(n).padStart(2, '0')}`
   return { next, commit: () => localStorage.setItem(key, String(n + 1)) }
 }
 
@@ -42,13 +43,19 @@ function updateSlot(slots: RoutingSlotV1[], index: number, patch: Partial<Routin
 }
 
 function isViewerClientName(name: string) {
-  return name.includes('-Intercom') || name.includes('-MTV') || name.includes('-SRC-') || name.includes('-Roster')
+  return (
+    name.includes('-Intercom') ||
+    name.includes('-MTV') ||
+    name.includes('-SRC-') ||
+    name.includes('-Roster') ||
+    name.endsWith('-USR')
+  )
 }
 
 export function Admin() {
   const navigate = useNavigate()
   const [searchParams, setSearchParams] = useSearchParams()
-  const opsId = (searchParams.get('ops') ?? '').trim().toUpperCase()
+  const opsId = normalizeOpsId(searchParams.get('ops') ?? '')
   const authed = isAuthed('admin')
 
   const { state, setRouting, setMarquee, setCollectorToken, setConferenceStarted, setHostBoundEmail } = useSignal()
@@ -77,8 +84,8 @@ export function Admin() {
     const domain = ((import.meta.env.VITE_JITSI_DOMAIN as string | undefined) ?? 'meet.jit.si')
       .replace(/^https?:\/\//, '')
       .replace(/\/+$/, '')
-    const room = encodeURIComponent(state.session.room)
-    const url = `https://${domain}/${room}`
+    const roomName = encodeURIComponent(normalizeOpsId(state.session.room) || 'ops01')
+    const url = `https://${domain}/${roomName}`
 
     const w = 420
     const h = 720
@@ -123,7 +130,8 @@ export function Admin() {
     }
   }
 
-  const meetingCode = opsId || state.session.opsId
+  const meetingCode = opsId || normalizeOpsId(state.session.opsId)
+  const room = useMemo(() => normalizeOpsId(state.session.room || meetingCode), [meetingCode, state.session.room])
 
   const collectorQrUrl = useMemo(() => {
     const token = state.collector.token
@@ -190,18 +198,18 @@ export function Admin() {
 
           <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-5">
             <label className="grid gap-2">
-              <div className="text-sm text-neutral-200">會議碼（OPSxx）</div>
+              <div className="text-sm text-neutral-200">會議碼（opsxx）</div>
               <input
                 value={opsDraft}
-                onChange={(e) => setOpsDraft(e.target.value.toUpperCase())}
-                className="h-11 rounded-lg border border-neutral-700 bg-neutral-950/50 px-3 uppercase outline-none ring-0 focus:border-neutral-500"
-                placeholder="OPS01"
+                onChange={(e) => setOpsDraft(normalizeOpsId(e.target.value))}
+                className="h-11 rounded-lg border border-neutral-700 bg-neutral-950/50 px-3 lowercase outline-none ring-0 focus:border-neutral-500"
+                placeholder="ops01"
               />
             </label>
             <button
               className="mt-4 h-11 w-full rounded-lg bg-neutral-100 text-sm font-semibold text-neutral-950 hover:bg-white"
               onClick={() => {
-                const trimmed = (opsDraft || '').trim().toUpperCase()
+                const trimmed = normalizeOpsId(opsDraft || '')
                 if (!trimmed) return
                 const counter = getNextOpsId()
                 if (trimmed === counter.next) counter.commit()
@@ -229,7 +237,7 @@ export function Admin() {
               會議碼：<span className="font-mono">{meetingCode}</span>
             </div>
             <div className="text-xs text-neutral-500">
-              會議室：<span className="font-mono">{state.session.room}</span>
+              會議室：<span className="font-mono">{room}</span>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -662,7 +670,7 @@ export function Admin() {
       <div className="fixed left-0 top-0 h-px w-px overflow-hidden opacity-0">
         <JitsiPlayer
           key={hostMountKey}
-          room={state.session.room}
+          room={room}
           displayName="OPS_MASTER"
           hidden
           onApi={(api) => {
