@@ -283,8 +283,18 @@ export function useLibJitsiConference(params: {
         typeof defaults.maxAttempts === 'number'
           ? defaults.maxAttempts
           : 0 // default: keep retrying for meet.jit.si transient failures
-      const baseDelay = typeof defaults.baseDelayMs === 'number' ? defaults.baseDelayMs : 1200
-      const maxDelay = typeof defaults.maxDelayMs === 'number' ? defaults.maxDelayMs : 15000
+      const r = String(reason ?? '')
+      const isServiceUnavailable =
+        r.includes('service-unavailable') ||
+        r.includes('service unavailable') ||
+        r.includes('conference request') ||
+        r.includes('focus.meet.jit.si') ||
+        r.includes('Data frame received after close')
+
+      const baseDelay =
+        typeof defaults.baseDelayMs === 'number' ? defaults.baseDelayMs : isServiceUnavailable ? 2500 : 1200
+      const maxDelay =
+        typeof defaults.maxDelayMs === 'number' ? defaults.maxDelayMs : isServiceUnavailable ? 60000 : 15000
 
       attemptRef.current += 1
       if (maxAttempts > 0 && attemptRef.current > maxAttempts) {
@@ -292,15 +302,22 @@ export function useLibJitsiConference(params: {
         return
       }
 
-      const computedDelay =
+      const computedDelayRaw =
         typeof delayMs === 'number'
           ? delayMs
           : Math.min(maxDelay, baseDelay * Math.pow(1.4, Math.max(0, attemptRef.current - 1)))
+      const jitter = 0.3
+      const computedDelay = Math.max(
+        250,
+        Math.round(computedDelayRaw * (1 - jitter + Math.random() * (2 * jitter))),
+      )
 
       setState((s) => ({
         ...s,
         status: 'connecting',
-        error: `連線不穩定，重試中（${attemptRef.current}${maxAttempts > 0 ? `/${maxAttempts}` : ''}）：${reason}`,
+        error: `meet.jit.si 暫時不穩，正在自動重試（${attemptRef.current}${
+          maxAttempts > 0 ? `/${maxAttempts}` : ''
+        }）：${reason}`,
       }))
 
       if (retryTimerRef.current !== null) window.clearTimeout(retryTimerRef.current)
