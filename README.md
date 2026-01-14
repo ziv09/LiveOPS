@@ -1,6 +1,10 @@
 ﻿# LiveOPS
 
-LiveOPS 是以 `meet.jit.si` External API（IFrame）為核心的戰術通訊與監控系統（Jitsi Wrapper）。
+LiveOPS 是以 **8x8 JaaS（Jitsi as a Service）** 為核心的戰術通訊與監控系統（Jitsi Wrapper）。
+
+- 影音：Viewer/Admin 使用 `lib-jitsi-meet`（單一連線、多格渲染）；Collector 使用 External API（IFrame）極簡採集。
+- 同步：路由指派/跑馬燈/開始串流 透過 Firebase RTDB 同步。
+- 門禁：所有人入房前必須先向 Firebase Cloud Functions 取得 JaaS JWT（硬上限 25 MAU）。
 
 ## 開發啟動
 
@@ -77,11 +81,40 @@ LiveOPS 是以 `meet.jit.si` External API（IFrame）為核心的戰術通訊與
 }
 ```
 
-## meet.jit.si 認證與權限（部署站建議）
+## 8x8 JaaS 門禁（25 MAU 硬上限）
 
-- 建議一定用 `https`（Firebase Hosting 預設就是），行動裝置的攝影機/麥克風權限會穩很多。
-- 控制端「開始串流」會讓 Viewer 從待機畫面切換到格子畫面；是否能順利入房/進等候室仍以 `meet.jit.si` 當下規則與負載為準。
-- 若遇到 `membersOnly` / `service-unavailable`，LiveOPS 的 SDK 連線會自動重試；通常等主持人就位或官方伺服器恢復就會進房。
+### 名額配置（固定 25）
+
+- 採集端 `src.*`：16
+- 監看端 `mon.*`（含 Admin）：4
+- 訪客 `crew.*`：5
+
+### 必要設定（Firebase Console）
+
+1. Authentication：啟用「匿名」登入（Anonymous）。
+2. Cloud Functions：設定 JaaS 簽章用 secrets（下面指令）。
+
+### 設定 Functions secrets（必做）
+
+LiveOPS 的 Functions 會用 RS256 私鑰簽出 JaaS JWT，所以你需要從 8x8 JaaS Console 下載 **Private Key（PEM 內容，含 BEGIN/END）**。
+
+在專案根目錄執行：
+
+- `firebase functions:secrets:set JAAS_PRIVATE_KEY`（貼上 PEM 私鑰全文）
+- `firebase functions:secrets:set JAAS_TENANT_ID`（例如 `vpaas-magic-cookie-xxxxxxxx...`）
+- `firebase functions:secrets:set JAAS_KID`（例如 `vpaas-magic-cookie-xxxxxxxx.../e8ff07-SAMPLE_APP`）
+
+部署：
+
+- `firebase deploy --only functions`
+
+### 前端環境變數
+
+把 `.env.example` 複製成 `.env.local`，至少補上：
+
+- `VITE_JITSI_DOMAIN=8x8.vc`
+- `VITE_JAAS_APP_ID=vpaas-magic-cookie-...`
+- `VITE_FUNCTIONS_REGION=asia-southeast1`
 
 ---
 

@@ -1,4 +1,5 @@
 import { getJitsiDomain } from './jitsiDefaults'
+import { getLibJitsiMeetScriptSrc } from './jitsiDefaults'
 
 function loadScript(src: string, id: string): Promise<void> {
   const existing = document.getElementById(id) as HTMLScriptElement | null
@@ -27,7 +28,7 @@ function loadScript(src: string, id: string): Promise<void> {
 
 export async function loadLibJitsiMeet(domain = getJitsiDomain()): Promise<any> {
   const safeDomain = domain.replace(/^https?:\/\//, '').replace(/\/+$/, '')
-  const src = `https://${safeDomain}/libs/lib-jitsi-meet.min.js`
+  const src = getLibJitsiMeetScriptSrc(safeDomain)
   const id = `lib-jitsi-meet:${safeDomain}`
   await loadScript(src, id)
   const JitsiMeetJS = window.JitsiMeetJS
@@ -48,4 +49,3 @@ export async function loadLibJitsiMeet(domain = getJitsiDomain()): Promise<any> 
 
   return JitsiMeetJS
 }
-

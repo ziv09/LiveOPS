@@ -7,6 +7,9 @@ import { useMediaQuery } from '../hooks/useMediaQuery'
 import { useLibJitsiConference } from '../jitsi/useLibJitsiConference'
 import { useSignal } from '../signal/useSignal'
 import { normalizeOpsId } from '../utils/ops'
+import { ensureRoleName } from '../utils/roleName'
+import { buildJaasSdkRoomName } from '../jaas/jaasConfig'
+import { useJaasGatekeeper } from '../jaas/useJaasGatekeeper'
 
 function makeGutter(direction: 'horizontal' | 'vertical') {
   const gutter = document.createElement('div')
@@ -116,12 +119,13 @@ export function ViewerMeet() {
 
   const opsId = (searchParams.get('ops') ?? '').trim().toLowerCase()
   const rawName = (searchParams.get('name') ?? '').trim() || '一般'
-  const name = rawName.endsWith('_監看') ? rawName : `${rawName}_監看`
+  const name = ensureRoleName('mon.', rawName, '一般')
   const authed = isAuthed('viewer')
 
   const isMobile = useMediaQuery('(max-width: 768px)')
   const { state, sync } = useSignal()
-  const room = useMemo(() => normalizeOpsId(state.session.room || opsId), [opsId, state.session.room])
+  const opsRoom = useMemo(() => normalizeOpsId(state.session.room || opsId), [opsId, state.session.room])
+  const room = useMemo(() => buildJaasSdkRoomName(opsRoom), [opsRoom])
 
   const [now, setNow] = useState(() => dayjs().format('HH:mm:ss'))
   const [listenEnabled, setListenEnabled] = useState(true)
@@ -194,13 +198,53 @@ export function ViewerMeet() {
     return srcs.filter((x) => !!x.name)
   }, [mtvSlot, visibleSourceSlots])
 
-  const enabled = true
+  const gate = useJaasGatekeeper({
+    opsId: opsRoom,
+    displayName: name,
+    requestedRole: 'viewer',
+    enabled: true,
+  })
+
+  const enabled = gate.status === 'ready'
 
   const { state: confState, api } = useLibJitsiConference({
     room,
-    displayName: `${name}-USR`,
+    displayName: name,
+    jwt: gate.token,
     enabled,
   })
+
+  if (gate.status === 'auth' || gate.status === 'issuing') {
+    return (
+      <div className="relative h-full w-full bg-neutral-950 text-neutral-100">
+        <div className="absolute inset-0 grid place-items-center p-6">
+          <div className="max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/30 p-5 text-center">
+            <div className="text-lg font-semibold">正在取得入場憑證...</div>
+            <div className="mt-2 text-sm text-neutral-300">正在向伺服器驗票並鎖定名額（25 MAU）。</div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (gate.status === 'error') {
+    return (
+      <div className="relative h-full w-full bg-neutral-950 text-neutral-100">
+        <div className="absolute inset-0 grid place-items-center p-6">
+          <div className="max-w-md rounded-2xl border border-red-500/30 bg-red-950/30 p-5">
+            <div className="text-lg font-semibold text-red-100">入場失敗</div>
+            <div className="mt-2 text-sm text-red-200 break-words">{gate.error || '無法取得入場 Token。'}</div>
+            <button
+              className="mt-4 h-10 w-full rounded-lg bg-neutral-100 px-3 text-sm font-semibold text-neutral-950 hover:bg-white"
+              onClick={() => navigate('/')}
+            >
+              返回首頁
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
 
   if (!showProgram && confState.lobby.status === 'off') {
     return (
@@ -278,7 +322,7 @@ export function ViewerMeet() {
   return (
     <div className="relative h-full w-full bg-neutral-950 text-neutral-100">
       {/* Connection status */}
-      <div className="pointer-events-none absolute left-3 bottom-4 z-30 hidden max-w-[520px] rounded-2xl border border-neutral-800 bg-neutral-950/70 px-3 py-2 text-[11px] text-neutral-200 backdrop-blur md:block">
+      <div className="pointer-events-none absolute left-3 bottom-4 z-30 hidden max-w-[560px] rounded-2xl border border-neutral-800 bg-neutral-950/70 px-3 py-2 text-[11px] text-neutral-200 backdrop-blur md:block">
         <div className="flex items-center gap-2">
           <span className="font-mono">Jitsi</span>
           <span className={confState.status === 'joined' ? 'text-emerald-200' : confState.status === 'error' ? 'text-rose-200' : 'text-amber-200'}>
@@ -293,8 +337,15 @@ export function ViewerMeet() {
               {sync.connected ? '已連線' : '連線中'}
             </span>
           )}
+          <span className="mx-2 text-neutral-700">/</span>
+          <span className="font-mono">Gate</span>
+          <span className={gate.status === 'ready' ? 'text-emerald-200' : 'text-amber-200'}>
+            ● {gate.status}
+          </span>
         </div>
         {confState.error ? <div className="mt-1 text-neutral-300">{confState.error}</div> : null}
+        {sync.error ? <div className="mt-1 text-neutral-300">{sync.error}</div> : null}
+        {gate.error ? <div className="mt-1 text-neutral-300">{gate.error}</div> : null}
       </div>
 
       {(confState.lobby.status === 'joining' || confState.lobby.status === 'waiting') && (

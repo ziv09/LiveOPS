@@ -10,6 +10,7 @@ import {
 type JitsiPlayerProps = {
   room: string
   displayName: string
+  jwt?: string | null
   className?: string
   hidden?: boolean
   configOverwrite?: Record<string, unknown>
@@ -67,6 +68,7 @@ export function JitsiPlayer(props: JitsiPlayerProps) {
         width: '100%',
         height: '100%',
         userInfo: { displayName: props.displayName },
+        jwt: props.jwt ?? undefined,
         configOverwrite: {
           ...getBaseConfigOverwrite(),
           ...(props.configOverwrite ?? {}),

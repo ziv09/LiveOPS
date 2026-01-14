@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { loadLibJitsiMeet } from './libJitsiMeetLoader'
 import { getJitsiDomain } from './jitsiDefaults'
+import { getJaasAppId } from './jitsiDefaults'
 
 export type LibJitsiRemote = {
   id: string
@@ -29,6 +30,7 @@ function pickBestVideoTrack(tracks: any[]): any | null {
 export function useLibJitsiConference(params: {
   room: string
   displayName: string
+  jwt?: string | null
   enabled: boolean
   mode?: 'viewer' | 'host'
   enableLocalAudio?: boolean
@@ -103,7 +105,8 @@ export function useLibJitsiConference(params: {
   const normalizedRoom = useMemo(() => {
     const raw = String(params.room ?? '').trim()
     const lower = raw.toLowerCase()
-    const safe = lower.replace(/[^a-z0-9_-]/g, '')
+    // JaaS roomName can be in the form "<appId>/<room>" (contains "/").
+    const safe = lower.replace(/[^a-z0-9_/-]/g, '')
     return safe || 'liveops'
   }, [params.room])
 
@@ -332,18 +335,32 @@ export function useLibJitsiConference(params: {
       if (disposed) return
 
       const safeDomain = domain
-      const hosts = {
-        domain: safeDomain,
-        anonymousdomain: `guest.${safeDomain}`,
-        muc: `conference.${safeDomain}`,
-        focus: `focus.${safeDomain}`,
-      }
-      // 新版 lib-jitsi-meet 已不支援 bosh/websocket 選項，請改用 serviceUrl（對齊 meet.jit.si config.js）
-      const serviceUrl = `wss://${safeDomain}/xmpp-websocket`
+      const jaasAppId = getJaasAppId()
 
-      const connection = new JitsiMeetJS.JitsiConnection(null, null, {
+      const isJaas = safeDomain === '8x8.vc' && !!jaasAppId
+      const roomForUrl = encodeURIComponent(normalizedRoom)
+
+      const hosts = isJaas
+        ? {
+            domain: safeDomain,
+            muc: `conference.${jaasAppId}.${safeDomain}`,
+            focus: `focus.${safeDomain}`,
+          }
+        : {
+            domain: safeDomain,
+            anonymousdomain: `guest.${safeDomain}`,
+            muc: `conference.${safeDomain}`,
+            focus: `focus.${safeDomain}`,
+          }
+
+      // lib-jitsi-meet JaaS requires tenant-specific websocket URL.
+      const serviceUrl = isJaas ? `wss://${safeDomain}/${jaasAppId}/xmpp-websocket?room=${roomForUrl}` : `wss://${safeDomain}/xmpp-websocket`
+      const websocketKeepAliveUrl = isJaas ? `https://${safeDomain}/${jaasAppId}/_unlock?room=${roomForUrl}` : undefined
+
+      const connection = new JitsiMeetJS.JitsiConnection(null, params.jwt ?? null, {
         hosts,
         serviceUrl,
+        websocketKeepAliveUrl,
         clientNode: 'http://jitsi.org/jitsimeet',
       })
       connectionRef.current = connection

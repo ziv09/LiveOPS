@@ -1,8 +1,12 @@
 import { initializeApp, type FirebaseApp } from 'firebase/app'
+import { getAuth, type Auth } from 'firebase/auth'
 import { getDatabase, type Database } from 'firebase/database'
+import { getFunctions, type Functions } from 'firebase/functions'
 
 let app: FirebaseApp | null = null
 let db: Database | null = null
+let auth: Auth | null = null
+let functions: Functions | null = null
 
 export function getFirebaseConfig() {
   const apiKey = import.meta.env.VITE_FIREBASE_API_KEY as string | undefined
@@ -35,3 +39,17 @@ export function getFirebaseDatabase() {
   return db
 }
 
+export function getFirebaseAuth() {
+  const app = getFirebaseApp()
+  if (!app) return null
+  if (!auth) auth = getAuth(app)
+  return auth
+}
+
+export function getFirebaseFunctions() {
+  const app = getFirebaseApp()
+  if (!app) return null
+  const region = (import.meta.env.VITE_FUNCTIONS_REGION as string | undefined) ?? 'asia-southeast1'
+  if (!functions) functions = getFunctions(app, region)
+  return functions
+}

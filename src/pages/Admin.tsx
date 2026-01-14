@@ -7,6 +7,9 @@ import { useSignal } from '../signal/useSignal'
 import type { RoutingSlotV1, RoutingSourceV1 } from '../signal/types'
 import { normalizeOpsId } from '../utils/ops'
 import { createCollectorToken } from '../utils/token'
+import { getRolePrefixFromDisplayName } from '../utils/roleName'
+import { buildJaasSdkRoomName, getJaasAppId, getJaasDomain } from '../jaas/jaasConfig'
+import { useJaasGatekeeper } from '../jaas/useJaasGatekeeper'
 
 function getNextOpsId() {
   const key = 'liveops.ops.counter'
@@ -31,16 +34,6 @@ function updateSlot(slots: RoutingSlotV1[], index: number, patch: Partial<Routin
   const next = [...slots]
   next[index] = { ...next[index], ...patch }
   return next
-}
-
-function isViewerClientName(name: string) {
-  return (
-    name.includes('-Intercom') ||
-    name.includes('-MTV') ||
-    name.includes('-SRC-') ||
-    name.includes('-Roster') ||
-    name.endsWith('-USR')
-  )
 }
 
 export function Admin() {
@@ -87,7 +80,7 @@ export function Admin() {
         window.setTimeout(() => setSdkEnabled(true), 80)
         setHostReady(true, 'Admin')
         setAuthHint(
-          '已關閉原生會議室：系統已自動重連並等待偵測主持人權限（Moderator）。若 10 秒內仍未取得，請再開啟原生會議室登入一次或稍後重試（meet.jit.si 可能暫態 service-unavailable）。',
+                  '已關閉原生會議室：系統已自動重連並等待偵測主持人權限（Moderator）。若 10 秒內仍未取得，請再開啟原生會議室登入一次或稍後重試（伺服器可能暫態 service-unavailable）。',
         )
       }
     }, 500)
@@ -95,21 +88,30 @@ export function Admin() {
   */
 
   const meetingCode = opsId || normalizeOpsId(state.session.opsId)
-  const room = useMemo(() => normalizeOpsId(state.session.room || meetingCode), [meetingCode, state.session.room])
+  const opsRoom = useMemo(() => normalizeOpsId(state.session.room || meetingCode), [meetingCode, state.session.room])
+  const room = useMemo(() => buildJaasSdkRoomName(opsRoom), [opsRoom])
+
+  const adminDisplayName = 'mon.Admin'
+  const gate = useJaasGatekeeper({
+    opsId: opsRoom,
+    displayName: adminDisplayName,
+    requestedRole: 'admin',
+    enabled: !!opsId && authed,
+  })
 
   const openJitsiAuthPopup = () => {
-    const domain = ((import.meta.env.VITE_JITSI_DOMAIN as string | undefined) ?? 'meet.jit.si')
-      .replace(/^https?:\/\//, '')
-      .replace(/\/+$/, '')
-    const roomName = encodeURIComponent(room || 'ops01')
-    const url = `https://${domain}/${roomName}`
+    const domain = getJaasDomain()
+    const appId = getJaasAppId()
+    const base = appId ? `https://${domain}/${appId}/${encodeURIComponent(opsRoom || 'ops01')}` : `https://${domain}`
+    const url = gate.token ? `${base}?jwt=${encodeURIComponent(gate.token)}` : base
     window.open(url, '_blank', 'noopener,noreferrer')
   }
 
   const { state: adminConfState, api: adminConfApi } = useLibJitsiConference({
     room,
-    displayName: 'OPS_ADMIN_SDK',
-    enabled: !!opsId && authed,
+    displayName: adminDisplayName,
+    jwt: gate.token,
+    enabled: !!opsId && authed && gate.status === 'ready',
     mode: 'host',
     enableLocalAudio: false,
     lobby: { enabled: true, autoApprove: false },
@@ -127,9 +129,7 @@ export function Admin() {
       .filter((p) => {
         const name = p.displayName ?? ''
         if (!name) return false
-        if (name === 'OPS_ADMIN_SDK') return false
-        if (isViewerClientName(name)) return false
-        return true
+        return getRolePrefixFromDisplayName(name) === 'src.'
       })
   }, [adminConfState.remotes])
 
@@ -267,12 +267,20 @@ export function Admin() {
               {!state.conference.started ? (
                 <div className="mt-2 text-xs text-neutral-400">
                   「開始串流」只控制 LiveOPS 的節目輸出（Viewer 何時切到格子畫面），不再綁主持人判斷。
-                  若採集端/監看端加入時遇到 `membersOnly` 或被擋在等候室，請點右側「開啟原生會議室」用原生流程登入成為主持人，並在下方等候室名單手動放行。
+                  若採集端/監看端加入時被擋在等候室，請在下方「等候室」名單手動放行；必要時可用右側「開啟原生會議室」開新分頁除錯。
                 </div>
               ) : null}
               <div className="mt-2 text-[11px] text-neutral-500">
                 Admin SDK：{adminConfState.status}
                 {adminConfState.error ? <span className="text-amber-200">（{adminConfState.error}）</span> : null}
+                <span className="ml-2">
+                  Gatekeeper：{gate.status}
+                  {gate.error ? <span className="text-amber-200">（{gate.error}）</span> : null}
+                </span>
+                <span className="ml-2">
+                  Sync：{sync.mode}
+                  {sync.error ? <span className="text-amber-200">（{sync.error}）</span> : null}
+                </span>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -301,9 +309,9 @@ export function Admin() {
               <button
                 className="h-10 rounded-lg border border-neutral-700 bg-neutral-900/30 px-4 text-sm font-semibold text-neutral-100 hover:border-neutral-500"
                 onClick={openJitsiAuthPopup}
-                title="開啟原生 meet.jit.si 房間（可登入成為主持人，以便放行等候室成員）"
+                title="開啟原生 8x8.vc 房間（除錯用）"
               >
-                開啟原生會議室（meet.jit.si）
+                開啟原生會議室（8x8.vc）
               </button>
               <button
                 className="h-10 rounded-lg border border-neutral-800 bg-neutral-900/30 px-3 text-sm hover:border-neutral-600"
@@ -326,7 +334,7 @@ export function Admin() {
               <button
                 className="h-9 rounded-lg border border-neutral-700 bg-neutral-900/30 px-3 text-xs font-semibold hover:border-neutral-500"
                 onClick={() => {
-                  setAuthHint('已手動重連 SDK。若仍未取得主持人權限，請確認你是第一個入房者，或稍後重試（meet.jit.si 可能暫時性 service-unavailable）。')
+                  setAuthHint('已手動重連 SDK。若仍未取得主持人權限，請確認你是第一個入房者，或稍後重試（伺服器可能暫時性 service-unavailable）。')
                   setSdkEnabled(false)
                   window.setTimeout(() => setSdkEnabled(true), 80)
                 }}

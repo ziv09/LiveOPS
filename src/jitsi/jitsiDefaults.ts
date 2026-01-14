@@ -1,10 +1,23 @@
 export function getJitsiDomain(): string {
-  const raw = (import.meta.env.VITE_JITSI_DOMAIN as string | undefined) ?? 'meet.jit.si'
+  const raw = (import.meta.env.VITE_JITSI_DOMAIN as string | undefined) ?? '8x8.vc'
   return raw.replace(/^https?:\/\//, '').replace(/\/+$/, '')
 }
 
+export function getJaasAppId(): string | null {
+  const appId = (import.meta.env.VITE_JAAS_APP_ID as string | undefined) ?? ''
+  return appId.trim() ? appId.trim() : null
+}
+
 export function getJitsiScriptSrc(domain: string): string {
+  const appId = getJaasAppId()
+  if (appId && domain === '8x8.vc') return `https://${domain}/${appId}/external_api.js`
   return `https://${domain}/external_api.js`
+}
+
+export function getLibJitsiMeetScriptSrc(domain: string): string {
+  const appId = getJaasAppId()
+  if (appId && domain === '8x8.vc') return `https://${domain}/${appId}/libs/lib-jitsi-meet.min.js`
+  return `https://${domain}/libs/lib-jitsi-meet.min.js`
 }
 
 export function getBaseConfigOverwrite(): Record<string, unknown> {

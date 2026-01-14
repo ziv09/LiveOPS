@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { setAuthed, verifyAdminPassword, verifyViewerPassword } from '../auth/auth'
 import { normalizeOpsId } from '../utils/ops'
+import { ensureRoleName } from '../utils/roleName'
 
 export function Home() {
   const navigate = useNavigate()
@@ -122,10 +123,10 @@ export function Home() {
                 }
                 setAuthed('viewer')
                 const baseName = (viewerName || '一般').trim() || '一般'
-                const nameWithSuffix = baseName.endsWith('_監看') ? baseName : `${baseName}_監看`
+                const displayName = ensureRoleName('mon.', baseName, '一般')
                 go('/viewer', {
                   ops: trimmedOps,
-                  name: nameWithSuffix,
+                  name: displayName,
                 })
               }}
             >
