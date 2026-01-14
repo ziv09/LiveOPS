@@ -24,81 +24,83 @@ export function Home() {
 
   return (
     <div className="min-h-full bg-neutral-950 text-neutral-100">
-      <div className="mx-auto flex min-h-full max-w-3xl flex-col items-center justify-center p-6">
-        <div className="w-full rounded-2xl border border-neutral-800 bg-neutral-900/40 p-6 shadow-xl">
-          <div className="mb-6">
-            <div className="text-2xl font-semibold tracking-tight">LiveOPS</div>
-            <div className="mt-1 text-sm text-neutral-300">
-              戰術通訊與監控系統（Jitsi Meet 封裝 / External API）
-            </div>
-          </div>
+      <div className="relative mx-auto flex min-h-full max-w-5xl flex-col items-center justify-center px-6 py-10">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_center,rgba(255,255,255,0.10)_0%,rgba(0,0,0,0.0)_40%,rgba(0,0,0,0.0)_100%)]" />
 
-          <div className="grid gap-4 md:grid-cols-2">
-            <label className="grid gap-2">
-              <div className="text-sm text-neutral-200">登入身分</div>
-              <select
-                value={role}
-                onChange={(e) => {
-                  setRole(e.target.value as 'admin' | 'viewer')
-                  setPassword('')
-                  setError(null)
-                }}
-                className="h-11 rounded-lg border border-neutral-700 bg-neutral-950/50 px-3 outline-none ring-0 focus:border-neutral-500"
-              >
-                <option value="admin">控制端（Admin）</option>
-                <option value="viewer">一般監看（Viewer）</option>
-              </select>
-            </label>
+        <div className="relative flex w-full flex-col items-center">
+          <img
+            src="/vite-full-white.svg"
+            alt="OPS"
+            className="w-[1440px] select-none opacity-95 drop-shadow-[0_0_60px_rgba(0,0,0,0.7)]"
+            draggable={false}
+            />
 
-            <label className="grid gap-2">
-              <div className="text-sm text-neutral-200">密碼</div>
-              <input
-                value={password}
-                onChange={(e) => {
-                  setPassword(e.target.value)
-                  setError(null)
-                }}
-                type="password"
-                className="h-11 rounded-lg border border-neutral-700 bg-neutral-950/50 px-3 outline-none ring-0 focus:border-neutral-500"
-                placeholder={role === 'admin' ? '請輸入控制端密碼' : '請輸入一般監看密碼'}
-              />
-            </label>
-
-            {role === 'viewer' ? (
+          <div className="mt-14 w-full max-w-4xl rounded-2xl border border-neutral-800 bg-neutral-900/20 p-5 shadow-2xl backdrop-blur">
+            <div className="grid gap-4 md:grid-cols-2">
               <label className="grid gap-2">
-                <div className="text-sm text-neutral-200">會議碼（例如 ops01）</div>
-                <input
-                  value={opsId}
+                <div className="text-xs text-neutral-300">登入身分</div>
+                <select
+                  value={role}
                   onChange={(e) => {
-                    setOpsId(normalizeOpsId(e.target.value))
+                    setRole(e.target.value as 'admin' | 'viewer')
+                    setPassword('')
                     setError(null)
                   }}
-                  className="h-11 rounded-lg border border-neutral-700 bg-neutral-950/50 px-3 lowercase outline-none ring-0 focus:border-neutral-500"
-                  placeholder="ops01"
-                />
+                  className="h-11 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
+                >
+                  <option value="admin">控制端（Admin）</option>
+                  <option value="viewer">一般監看（Viewer）</option>
+                </select>
               </label>
-            ) : (
-              <div className="hidden md:block" />
-            )}
 
-            {role === 'viewer' ? (
               <label className="grid gap-2">
-                <div className="text-sm text-neutral-200">顯示名稱（選填）</div>
+                <div className="text-xs text-neutral-300">密碼</div>
                 <input
-                  value={viewerName}
-                  onChange={(e) => setViewerName(e.target.value)}
-                  className="h-11 rounded-lg border border-neutral-700 bg-neutral-950/50 px-3 outline-none ring-0 focus:border-neutral-500"
-                  placeholder="例如：一般"
+                  value={password}
+                  onChange={(e) => {
+                    setPassword(e.target.value)
+                    setError(null)
+                  }}
+                  type="password"
+                  className="h-11 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
+                  placeholder={role === 'admin' ? '請輸入控制端密碼' : '請輸入一般監看密碼'}
                 />
               </label>
-            ) : (
-              <div className="hidden md:block" />
-            )}
-          </div>
 
-          <div className="mt-6 grid gap-3">
+              {role === 'viewer' ? (
+                <label className="grid gap-2">
+                  <div className="text-xs text-neutral-300">會議碼（例如 ops01）</div>
+                  <input
+                    value={opsId}
+                    onChange={(e) => {
+                      setOpsId(normalizeOpsId(e.target.value))
+                      setError(null)
+                    }}
+                    className="h-11 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm lowercase outline-none focus:border-neutral-500"
+                    placeholder="ops01"
+                  />
+                </label>
+              ) : (
+                <div className="hidden md:block" />
+              )}
+
+              {role === 'viewer' ? (
+                <label className="grid gap-2">
+                  <div className="text-xs text-neutral-300">名稱（選填）</div>
+                  <input
+                    value={viewerName}
+                    onChange={(e) => setViewerName(e.target.value)}
+                    className="h-11 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
+                    placeholder="例如：一般"
+                  />
+                </label>
+              ) : (
+                <div className="hidden md:block" />
+              )}
+            </div>
+
             <button
-              className="h-11 rounded-lg bg-neutral-100 text-sm font-semibold text-neutral-950 hover:bg-white"
+              className="mt-5 h-12 w-full rounded-xl bg-neutral-100 text-sm font-semibold text-neutral-950 hover:bg-white"
               onClick={() => {
                 if (role === 'admin') {
                   if (!verifyAdminPassword(password)) {
@@ -130,16 +132,15 @@ export function Home() {
               登入
             </button>
 
-          </div>
+            {error ? (
+              <div className="mt-4 rounded-xl border border-red-500/30 bg-red-950/30 p-3 text-sm text-red-200">
+                {error}
+              </div>
+            ) : null}
 
-          {error ? (
-            <div className="mt-4 rounded-xl border border-red-500/30 bg-red-950/30 p-3 text-sm text-red-200">
-              {error}
+            <div className="mt-5 text-center text-xs leading-relaxed text-neutral-500">
+              提示：採集端請一律使用控制端產生的採集連結或 QR Code 進入。
             </div>
-          ) : null}
-
-          <div className="mt-6 text-xs leading-relaxed text-neutral-400">
-            提示：採集端請一律使用控制端「啟動會議」後產生的採集連結或 QR Code 進入。
           </div>
         </div>
       </div>
