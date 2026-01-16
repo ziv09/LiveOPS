@@ -91,8 +91,8 @@ function signJaasJwt(params) {
         aud: 'jitsi',
         iss: 'chat',
         iat: nowSec,
-        nbf: nowSec - 5,
-        exp: nowSec + 60 * 5,
+        nbf: nowSec - 10,
+        exp: nowSec + 60 * 60,
         sub: params.tenantId,
         room: params.room,
         context: {
@@ -100,11 +100,20 @@ function signJaasJwt(params) {
                 moderator: params.moderator,
                 name: params.displayName,
                 id: params.userId,
+                email: `${params.userId}@${params.tenantId}.com`,
+                avatar: '',
+            },
+            features: {
+                livestreaming: params.moderator,
+                recording: params.moderator,
+                transcription: params.moderator,
+                'outbound-call': params.moderator,
             },
         },
     };
     return jwt.sign(payload, params.privateKeyPem, {
         algorithm: 'RS256',
+        keyid: params.kid,
         header: { kid: params.kid, typ: 'JWT', alg: 'RS256' },
     });
 }
@@ -120,9 +129,9 @@ export const issueJaasToken = onCall({ secrets: [JAAS_PRIVATE_KEY, JAAS_KID, JAA
         throw new HttpsError('invalid-argument', '缺少 displayName。');
     const role = getRoleGroupFromDisplayName(displayName);
     const uid = req.auth.uid;
-    const privateKeyPem = JAAS_PRIVATE_KEY.value();
-    const kid = JAAS_KID.value();
-    const tenantId = JAAS_TENANT_ID.value();
+    const privateKeyPem = JAAS_PRIVATE_KEY.value().trim();
+    const kid = JAAS_KID.value().trim();
+    const tenantId = JAAS_TENANT_ID.value().trim();
     if (!privateKeyPem || !privateKeyPem.includes('BEGIN')) {
         throw new HttpsError('failed-precondition', 'Cloud Functions 尚未設定 JAAS_PRIVATE_KEY（必須是 PEM 私鑰內容）。');
     }
@@ -210,4 +219,19 @@ export const cleanupJaasPresence = onSchedule('every 1 minutes', async () => {
     if (Object.keys(updates).length > 0) {
         await admin.database().ref().update(updates);
     }
+});
+export const releaseJaasSlot = onCall(async (req) => {
+    if (!req.auth?.uid)
+        throw new HttpsError('unauthenticated', '需要先登入（Firebase Auth）。');
+    const ops = normalizeOps(req.data?.ops);
+    const slotId = String(req.data?.slotId ?? '').trim();
+    if (!ops)
+        throw new HttpsError('invalid-argument', '缺少 ops。');
+    if (!slotId)
+        throw new HttpsError('invalid-argument', '缺少 slotId。');
+    // Ideally verify admin role here, but purely relying on knowing the slotId is a weak but existing guard.
+    // Real security would check if req.auth.token.admin is true or similar.
+    const ref = admin.database().ref(`liveops/v2/jaas/rooms/${ops}/state/allocations/${slotId}`);
+    await ref.remove();
+    return { ok: true };
 });

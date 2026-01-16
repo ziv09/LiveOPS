@@ -2,6 +2,9 @@ import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { QRCodeCanvas } from 'qrcode.react'
 import { clearAuth, isAuthed } from '../auth/auth'
+import { getFirebaseDatabase, getFirebaseFunctions } from '../signal/firebase'
+import { onValue, ref } from 'firebase/database'
+import { httpsCallable } from 'firebase/functions'
 import { useLibJitsiConference } from '../jitsi/useLibJitsiConference'
 import { useSignal } from '../signal/useSignal'
 import type { RoutingSlotV1, RoutingSourceV1 } from '../signal/types'
@@ -34,6 +37,127 @@ function updateSlot(slots: RoutingSlotV1[], index: number, patch: Partial<Routin
   const next = [...slots]
   next[index] = { ...next[index], ...patch }
   return next
+}
+
+function TokenStatusPanel(props: { opsId: string }) {
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const [allocations, setAllocations] = useState<any[]>([])
+  const [counts, setCounts] = useState({ total: 0, collector: 0, monitor: 0, crew: 0 })
+  const [loading, setLoading] = useState(true)
+  const functions = useMemo(() => {
+    try {
+      return getFirebaseFunctions()
+    } catch {
+      return null
+    }
+  }, [])
+
+  useEffect(() => {
+    const db = getFirebaseDatabase()
+    if (!db || !props.opsId) return
+
+    const roomRef = ref(db, `liveops/v2/jaas/rooms/${props.opsId}/state`)
+    const unsub = onValue(roomRef, (snap) => {
+      setLoading(false)
+      const val = snap.val()
+      const allocs = val?.allocations ?? {}
+      const list = Object.values(allocs).map((a: any) => ({
+        ...a,
+        lastSeenDate: a.lastSeen ? new Date(a.lastSeen).toLocaleTimeString() : 'N/A',
+        isStale: Date.now() - (Number(a.lastSeen) || 0) > 60_000,
+      }))
+      // Sort: Stale first, then by role, then by name
+      list.sort((a, b) => {
+        if (a.isStale !== b.isStale) return a.isStale ? -1 : 1
+        if (a.role !== b.role) return a.role.localeCompare(b.role)
+        return String(a.displayName ?? '').localeCompare(String(b.displayName ?? ''))
+      })
+      setAllocations(list)
+
+      const c = { total: 0, collector: 0, monitor: 0, crew: 0 }
+      for (const a of list) {
+        c.total++
+        if (a.role === 'collector') c.collector++
+        if (a.role === 'monitor') c.monitor++
+        if (a.role === 'crew') c.crew++
+      }
+      setCounts(c)
+    })
+
+    return () => unsub()
+  }, [props.opsId])
+
+  const handleKick = async (slotId: string) => {
+    if (!functions) return
+    if (!globalThis.confirm('確定要強制釋放此名額嗎？\n這會將該裝置踢出資料庫配額，但若它仍連線中可能會嘗試重領。')) return
+    try {
+      const fn = httpsCallable(functions, 'releaseJaasSlot')
+      await fn({ ops: props.opsId, slotId })
+    } catch (e) {
+      window.alert(`釋放失敗：${e}`)
+    }
+  }
+
+  if (loading) return <div className="p-4 text-sm text-neutral-400">正在載入 Token 狀態...</div>
+
+  return (
+    <div className="grid gap-4">
+      <div className="flex flex-wrap items-center gap-4 text-sm">
+        <div className="font-semibold text-neutral-200">
+          總用量：
+          <span className={counts.total >= 25 ? 'text-rose-400' : 'text-emerald-400'}>{counts.total}</span> / 25
+        </div>
+        <div className="text-neutral-400">
+          SRC: {counts.collector}/16 · MON: {counts.monitor}/4 · CREW: {counts.crew}/5
+        </div>
+      </div>
+
+      <div className="max-h-60 overflow-y-auto rounded-xl border border-neutral-800 bg-neutral-950/40">
+        <table className="w-full text-left text-xs">
+          <thead className="sticky top-0 bg-neutral-900 text-neutral-400">
+            <tr>
+              <th className="px-3 py-2 font-medium">Slot ID (Role)</th>
+              <th className="px-3 py-2 font-medium">Display Name</th>
+              <th className="px-3 py-2 font-medium">Last Seen</th>
+              <th className="px-3 py-2 font-medium">Action</th>
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-neutral-800 text-neutral-300">
+            {allocations.map((a) => (
+              <tr key={a.slotId} className={a.isStale ? 'bg-rose-950/10' : ''}>
+                <td className="px-3 py-2 font-mono">
+                  {a.slotId}
+                  <span className="ml-1 text-neutral-500">({a.role})</span>
+                </td>
+                <td className="px-3 py-2">{a.displayName}</td>
+                <td className="px-3 py-2">
+                  <div className={a.isStale ? 'text-rose-400' : 'text-emerald-400'}>
+                    {a.lastSeenDate}
+                  </div>
+                  {a.isStale && <div className="text-[10px] text-rose-500">可能已離線 (Ghost)</div>}
+                </td>
+                <td className="px-3 py-2">
+                  <button
+                    className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-[10px] hover:bg-neutral-700 hover:text-white"
+                    onClick={() => handleKick(a.slotId)}
+                  >
+                    釋放
+                  </button>
+                </td>
+              </tr>
+            ))}
+            {allocations.length === 0 && (
+              <tr>
+                <td colSpan={4} className="px-3 py-4 text-center text-neutral-500">
+                  目前無人佔用 Token
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  )
 }
 
 export function Admin() {
@@ -531,6 +655,14 @@ export function Admin() {
                 </button>
               </div>
             </div>
+          </div>
+
+          <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4">
+            <div className="mb-2 text-sm font-semibold">系統 Token 狀態（配額管理）</div>
+            <div className="text-xs text-neutral-400 mb-3">
+              顯示目前系統已發出的 Token（含可能已斷線但未釋放的幽靈佔用）。若遇「名額已滿」問題，請在此手動釋放。
+            </div>
+            <TokenStatusPanel opsId={opsRoom} />
           </div>
 
           <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4">

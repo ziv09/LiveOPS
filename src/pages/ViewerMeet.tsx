@@ -119,7 +119,9 @@ export function ViewerMeet() {
 
   const opsId = (searchParams.get('ops') ?? '').trim().toLowerCase()
   const rawName = (searchParams.get('name') ?? '').trim() || '一般'
-  const name = ensureRoleName('mon.', rawName, '一般')
+  // Preserve the role prefix from URL (mon. or crew.), only add mon. if no prefix exists
+  const hasRolePrefix = rawName.startsWith('mon.') || rawName.startsWith('crew.') || rawName.startsWith('src.')
+  const name = hasRolePrefix ? rawName : ensureRoleName('mon.', rawName, '一般')
   const authed = isAuthed('viewer')
 
   const isMobile = useMediaQuery('(max-width: 768px)')

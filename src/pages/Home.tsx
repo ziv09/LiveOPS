@@ -8,7 +8,7 @@ export function Home() {
   const navigate = useNavigate()
   const [searchParams] = useSearchParams()
 
-  const [role, setRole] = useState<'admin' | 'viewer'>('admin')
+  const [role, setRole] = useState<'admin' | 'viewer' | 'crew'>('admin')
   const [password, setPassword] = useState('')
   const initialOps = useMemo(() => searchParams.get('ops') ?? '', [searchParams])
   const [opsId, setOpsId] = useState(initialOps)
@@ -23,6 +23,8 @@ export function Home() {
     navigate(`${path}?${sp.toString()}`)
   }
 
+  const needsOpsAndName = role === 'viewer' || role === 'crew'
+
   return (
     <div className="min-h-full bg-neutral-950 text-neutral-100">
       <div className="relative mx-auto flex min-h-full max-w-5xl flex-col items-center justify-center px-6 py-10">
@@ -34,7 +36,7 @@ export function Home() {
             alt="OPS"
             className="w-[1440px] select-none opacity-95 drop-shadow-[0_0_60px_rgba(0,0,0,0.7)]"
             draggable={false}
-            />
+          />
 
           <div className="mt-14 w-full max-w-4xl rounded-2xl border border-neutral-800 bg-neutral-900/20 p-5 shadow-2xl backdrop-blur">
             <div className="grid gap-4 md:grid-cols-2">
@@ -43,7 +45,7 @@ export function Home() {
                 <select
                   value={role}
                   onChange={(e) => {
-                    setRole(e.target.value as 'admin' | 'viewer')
+                    setRole(e.target.value as 'admin' | 'viewer' | 'crew')
                     setPassword('')
                     setError(null)
                   }}
@@ -51,6 +53,7 @@ export function Home() {
                 >
                   <option value="admin">控制端（Admin）</option>
                   <option value="viewer">一般監看（Viewer）</option>
+                  <option value="crew">來賓（Crew）</option>
                 </select>
               </label>
 
@@ -68,7 +71,7 @@ export function Home() {
                 />
               </label>
 
-              {role === 'viewer' ? (
+              {needsOpsAndName ? (
                 <label className="grid gap-2">
                   <div className="text-xs text-neutral-300">會議碼（例如 ops01）</div>
                   <input
@@ -85,14 +88,14 @@ export function Home() {
                 <div className="hidden md:block" />
               )}
 
-              {role === 'viewer' ? (
+              {needsOpsAndName ? (
                 <label className="grid gap-2">
                   <div className="text-xs text-neutral-300">名稱（選填）</div>
                   <input
                     value={viewerName}
                     onChange={(e) => setViewerName(e.target.value)}
                     className="h-11 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
-                    placeholder="例如：一般"
+                    placeholder={role === 'crew' ? '例如：來賓1' : '例如：一般'}
                   />
                 </label>
               ) : (
@@ -112,6 +115,7 @@ export function Home() {
                   navigate('/admin')
                   return
                 }
+                // viewer and crew both use viewer password
                 if (!verifyViewerPassword(password)) {
                   setError('一般監看密碼錯誤。')
                   return
@@ -122,8 +126,9 @@ export function Home() {
                   return
                 }
                 setAuthed('viewer')
-                const baseName = (viewerName || '一般').trim() || '一般'
-                const displayName = ensureRoleName('mon.', baseName, '一般')
+                const baseName = (viewerName || (role === 'crew' ? '來賓' : '一般')).trim() || (role === 'crew' ? '來賓' : '一般')
+                const rolePrefix = role === 'crew' ? 'crew.' : 'mon.'
+                const displayName = ensureRoleName(rolePrefix, baseName, role === 'crew' ? '來賓' : '一般')
                 go('/viewer', {
                   ops: trimmedOps,
                   name: displayName,
