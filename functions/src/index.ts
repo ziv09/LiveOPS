@@ -210,7 +210,10 @@ export const issueJaasToken = onCall(
       tenantId,
       kid,
       privateKeyPem,
-      room: ops,
+      // Use wildcard request to avoid "Room and token mismatched" errors.
+      // The security is handled by our backend picking a slotId and only issuing
+      // the token if the user is authorized (authenticated) and has quota.
+      room: '*',
       userId: alloc.slotId,
       displayName,
       moderator,

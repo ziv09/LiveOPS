@@ -117,20 +117,28 @@ export function useLibJitsiConference(params: {
     const visible = Array.from(new Set(receiverHintRef.current.visible.filter(Boolean)))
     const high = Array.from(new Set(receiverHintRef.current.high.filter(Boolean)))
 
-    // 尚未拿到 endpoint id（例如剛入房或尚未完成名稱映射）時，不要把 lastN 設成 0，
-    // 否則會導致完全收不到遠端影像/軌道而無法建立映射。
+    // 避免剛入房時沒有 endpoint 導致問題
     if (visible.length === 0 && high.length === 0) return
 
+    // 1. 設定 LastN
+    // User 回報黑畫面，可能是此值太小導致非目前發話者被切斷。
+    // 在此將 LastN 設為 visible 的數量 + buffer，或者如果總人數不多乾脆設大一點 (-1 = unlimited 但較耗頻寬)。
+    // 這裡我們嘗試設為至少 25 (符合 MAU)，確保 grid 內的所有人都能收到畫面。
     try {
-      conf.setLastN?.(Math.max(0, visible.length))
+      // 確保至少能看到所有 visible 的人，加上 5 個 buffer
+      conf.setLastN?.(Math.max(25, visible.length + 5))
     } catch {
       // noop
     }
 
+    // 2. 設定接收品質 (Receiver Video Constraints)
+    // 根據需求：
+    // - Grid (visible): 低畫素沒關係 (SD/LD)
+    // - Fullscreen/MTV (high): 至少 720p-1080p
     const constraints = {
-      lastN: Math.max(0, visible.length),
-      selectedEndpoints: visible,
+      // 預設 (Grid) 限制在 180p-360p 以節省頻寬，避免黑畫面
       defaultConstraints: { maxHeight: 360 },
+      // 高畫質 (Fullscreen/MTV) 強制 720p 或更高 (1080p)
       constraints: Object.fromEntries(high.map((id) => [id, { maxHeight: 1080 }])),
     }
 
@@ -140,8 +148,10 @@ export function useLibJitsiConference(params: {
       // noop
     }
 
+    // 3. 選定參與者 (Select Participants)
+    // 這會告訴 JVB 優先傳送這些人的封包
     try {
-      conf.selectParticipants?.(high)
+      conf.selectParticipants?.([...high, ...visible])
     } catch {
       // noop
     }
@@ -317,9 +327,8 @@ export function useLibJitsiConference(params: {
       setState((s) => ({
         ...s,
         status: 'connecting',
-        error: `伺服器暫時不穩，正在自動重試（${attemptRef.current}${
-          maxAttempts > 0 ? `/${maxAttempts}` : ''
-        }）：${reason}`,
+        error: `伺服器暫時不穩，正在自動重試（${attemptRef.current}${maxAttempts > 0 ? `/${maxAttempts}` : ''
+          }）：${reason}`,
       }))
 
       if (retryTimerRef.current !== null) window.clearTimeout(retryTimerRef.current)
@@ -329,285 +338,285 @@ export function useLibJitsiConference(params: {
       }, computedDelay)
     }
 
-    ;(async () => {
-      const JitsiMeetJS = await loadLibJitsiMeet(domain)
-      if (disposed) return
+      ; (async () => {
+        const JitsiMeetJS = await loadLibJitsiMeet(domain)
+        if (disposed) return
 
-      const safeDomain = domain
-      const jaasAppId = getJaasAppId()
+        const safeDomain = domain
+        const jaasAppId = getJaasAppId()
 
-      const isJaas = safeDomain === '8x8.vc' && !!jaasAppId
-      const roomForUrl = encodeURIComponent(normalizedRoom)
+        const isJaas = safeDomain === '8x8.vc' && !!jaasAppId
+        const roomForUrl = encodeURIComponent(normalizedRoom)
 
-      const hosts = isJaas
-        ? {
+        const hosts = isJaas
+          ? {
             domain: safeDomain,
             muc: `conference.${jaasAppId}.${safeDomain}`,
             focus: `focus.${safeDomain}`,
           }
-        : {
+          : {
             domain: safeDomain,
             anonymousdomain: `guest.${safeDomain}`,
             muc: `conference.${safeDomain}`,
             focus: `focus.${safeDomain}`,
           }
 
-      // lib-jitsi-meet JaaS requires tenant-specific websocket URL.
-      const serviceUrl = isJaas ? `wss://${safeDomain}/${jaasAppId}/xmpp-websocket?room=${roomForUrl}` : `wss://${safeDomain}/xmpp-websocket`
-      const websocketKeepAliveUrl = isJaas ? `https://${safeDomain}/${jaasAppId}/_unlock?room=${roomForUrl}` : undefined
+        // lib-jitsi-meet JaaS requires tenant-specific websocket URL.
+        const serviceUrl = isJaas ? `wss://${safeDomain}/${jaasAppId}/xmpp-websocket?room=${roomForUrl}` : `wss://${safeDomain}/xmpp-websocket`
+        const websocketKeepAliveUrl = isJaas ? `https://${safeDomain}/${jaasAppId}/_unlock?room=${roomForUrl}` : undefined
 
-      const connection = new JitsiMeetJS.JitsiConnection(null, params.jwt ?? null, {
-        hosts,
-        serviceUrl,
-        websocketKeepAliveUrl,
-        clientNode: 'http://jitsi.org/jitsimeet',
-      })
-      connectionRef.current = connection
+        const connection = new JitsiMeetJS.JitsiConnection(null, params.jwt ?? null, {
+          hosts,
+          serviceUrl,
+          websocketKeepAliveUrl,
+          clientNode: 'http://jitsi.org/jitsimeet',
+        })
+        connectionRef.current = connection
 
-      const onConnFailed = (e: any) => {
-        if (disposed) return
-        scheduleRestart(String(e?.message ?? e ?? '連線失敗（Jitsi）'))
-      }
-      const onConnDisconnected = () => {
-        if (disposed) return
-        scheduleRestart('連線中斷（Jitsi）')
-      }
-      const onConnSuccess = () => {
-        if (disposed) return
-
-        let conf: any
-        try {
-          conf = connection.initJitsiConference(normalizedRoom, {
-            openBridgeChannel: true,
-          })
-        } catch (e: any) {
-          scheduleRestart(`會議室初始化失敗：${String(e?.message ?? e ?? '')}`)
-          return
-        }
-        conferenceRef.current = conf
-
-        const confEvents = JitsiMeetJS.events?.conference
-        const trackEvents = JitsiMeetJS.events?.track
-
-        const onConferenceFailed = (e: any) => {
+        const onConnFailed = (e: any) => {
           if (disposed) return
-          const err = String(e?.error ?? e?.message ?? e ?? '')
-          if (err.includes('membersOnly')) {
-            setLobbyStatus('waiting', '導播確認身分中...（等待主持人就位）')
-            // 手動放行模式：讓 SDK 自己留在 lobby room 敲門，等待主持人核准。
-            // 不要在這裡重連，避免把 lobby 流程打斷。
-            if (params.mode === 'host') {
-              scheduleRestart('membersOnly（主持人尚未就位）', 1500)
-            }
+          scheduleRestart(String(e?.message ?? e ?? '連線失敗（Jitsi）'))
+        }
+        const onConnDisconnected = () => {
+          if (disposed) return
+          scheduleRestart('連線中斷（Jitsi）')
+        }
+        const onConnSuccess = () => {
+          if (disposed) return
+
+          let conf: any
+          try {
+            conf = connection.initJitsiConference(normalizedRoom, {
+              openBridgeChannel: true,
+            })
+          } catch (e: any) {
+            scheduleRestart(`會議室初始化失敗：${String(e?.message ?? e ?? '')}`)
             return
           }
-          scheduleRestart(`加入會議失敗：${String(e?.message ?? e?.error ?? e ?? '')}`)
-        }
+          conferenceRef.current = conf
 
-        const onUserJoined = (id: string, user: any) => {
-          const n = user?.getDisplayName?.() ?? user?.getName?.() ?? ''
-          if (typeof n === 'string' && n.trim()) participantNameRef.current.set(id, n.trim())
-          rebuildRemotes()
-        }
-        const onUserLeft = (id: string) => {
-          participantNameRef.current.delete(id)
-          remoteTracksRef.current.delete(id)
-          rebuildRemotes()
-        }
-        const onDisplayNameChanged = (id: string, displayName: string) => {
-          if (typeof displayName === 'string' && displayName.trim()) {
-            participantNameRef.current.set(id, displayName.trim())
+          const confEvents = JitsiMeetJS.events?.conference
+          const trackEvents = JitsiMeetJS.events?.track
+
+          const onConferenceFailed = (e: any) => {
+            if (disposed) return
+            const err = String(e?.error ?? e?.message ?? e ?? '')
+            if (err.includes('membersOnly')) {
+              setLobbyStatus('waiting', '導播確認身分中...（等待主持人就位）')
+              // 手動放行模式：讓 SDK 自己留在 lobby room 敲門，等待主持人核准。
+              // 不要在這裡重連，避免把 lobby 流程打斷。
+              if (params.mode === 'host') {
+                scheduleRestart('membersOnly（主持人尚未就位）', 1500)
+              }
+              return
+            }
+            scheduleRestart(`加入會議失敗：${String(e?.message ?? e?.error ?? e ?? '')}`)
+          }
+
+          const onUserJoined = (id: string, user: any) => {
+            const n = user?.getDisplayName?.() ?? user?.getName?.() ?? ''
+            if (typeof n === 'string' && n.trim()) participantNameRef.current.set(id, n.trim())
             rebuildRemotes()
           }
-        }
-
-        const onTrackAdded = (track: any) => {
-          if (!track || track.isLocal?.()) return
-          const pid = track.getParticipantId?.()
-          if (!pid) return
-          try {
-            const p = conf.getParticipantById?.(pid)
-            const n = p?.getDisplayName?.() ?? p?.getName?.() ?? ''
-            if (typeof n === 'string' && n.trim()) participantNameRef.current.set(pid, n.trim())
-          } catch {
-            // noop
+          const onUserLeft = (id: string) => {
+            participantNameRef.current.delete(id)
+            remoteTracksRef.current.delete(id)
+            rebuildRemotes()
           }
-          const list = remoteTracksRef.current.get(pid) ?? []
-          remoteTracksRef.current.set(pid, [...list, track])
-          rebuildRemotes()
-        }
-        const onTrackRemoved = (track: any) => {
-          if (!track || track.isLocal?.()) return
-          const pid = track.getParticipantId?.()
-          if (!pid) return
-          const list = remoteTracksRef.current.get(pid) ?? []
-          remoteTracksRef.current.set(
-            pid,
-            list.filter((t) => t !== track),
-          )
-          rebuildRemotes()
-        }
-
-        conf.on?.(confEvents?.USER_JOINED ?? 'conference.userJoined', onUserJoined)
-        conf.on?.(confEvents?.USER_LEFT ?? 'conference.userLeft', onUserLeft)
-        conf.on?.(confEvents?.DISPLAY_NAME_CHANGED ?? 'conference.displayNameChanged', onDisplayNameChanged)
-        conf.on?.(confEvents?.TRACK_ADDED ?? 'conference.trackAdded', onTrackAdded)
-        conf.on?.(confEvents?.TRACK_REMOVED ?? 'conference.trackRemoved', onTrackRemoved)
-        conf.on?.(confEvents?.CONFERENCE_FAILED ?? 'conference.failed', onConferenceFailed)
-
-        const roleChangedEvt =
-          confEvents?.LOCAL_ROLE_CHANGED ?? confEvents?.ROLE_CHANGED ?? 'conference.localRoleChanged'
-        const onLocalRoleChanged = () => {
-          if (disposed) return
-          syncLocalRole(conf)
-        }
-        // Some deployments emit different event names; subscribe to multiple best-effort variants.
-        conf.on?.(roleChangedEvt, onLocalRoleChanged)
-        conf.on?.(confEvents?.ROLE_CHANGED ?? 'conference.roleChanged', onLocalRoleChanged)
-        conf.on?.(confEvents?.USER_ROLE_CHANGED ?? 'conference.userRoleChanged', onLocalRoleChanged)
-        conf.on?.('conference.localRoleChanged', onLocalRoleChanged)
-
-        // Lobby (best-effort)
-        const lobbyUserJoinedEvt = confEvents?.LOBBY_USER_JOINED ?? 'conference.lobbyUserJoined'
-        const lobbyUserLeftEvt = confEvents?.LOBBY_USER_LEFT ?? 'conference.lobbyUserLeft'
-        const lobbyAccessGrantedEvt = confEvents?.LOBBY_ACCESS_GRANTED ?? 'conference.lobbyAccessGranted'
-        const lobbyAccessDeniedEvt = confEvents?.LOBBY_ACCESS_DENIED ?? 'conference.lobbyAccessDenied'
-
-        const shouldApprove = (displayName: string) => {
-          if (!params.lobby?.allowNames || params.lobby.allowNames.length === 0) return true
-          return params.lobby.allowNames.includes(displayName)
-        }
-
-        const onLobbyUserJoined = (e: any) => {
-          const id = String(e?.id ?? e?.participantId ?? '')
-          const dn = String(e?.displayName ?? e?.name ?? '').trim() || id
-          if (!id) return
-          lobbyPendingRef.current.set(id, dn)
-          rebuildRemotes()
-          if (params.mode === 'host' && params.lobby?.autoApprove !== false) {
-            if (shouldApprove(dn)) void approveLobbyAccess(id)
-          }
-        }
-        const onLobbyUserLeft = (e: any) => {
-          const id = String(e?.id ?? e?.participantId ?? '')
-          if (!id) return
-          lobbyPendingRef.current.delete(id)
-          rebuildRemotes()
-        }
-        const onLobbyGranted = () => {
-          setLobbyStatus('approved', null)
-          try {
-            conf.join?.()
-          } catch {
-            // noop
-          }
-        }
-        const onLobbyDenied = () => {
-          setLobbyStatus('denied', '導播拒絕加入')
-        }
-
-        conf.on?.(lobbyUserJoinedEvt, onLobbyUserJoined)
-        conf.on?.(lobbyUserLeftEvt, onLobbyUserLeft)
-        conf.on?.(lobbyAccessGrantedEvt, onLobbyGranted)
-        conf.on?.(lobbyAccessDeniedEvt, onLobbyDenied)
-
-        conf.on?.(confEvents?.CONFERENCE_JOINED ?? 'conference.joined', () => {
-          if (disposed) return
-          setState((s) => ({ ...s, status: 'joined', error: null }))
-          setLobbyStatus('off', null)
-          attemptRef.current = 0
-          try {
-            conf.setDisplayName?.(params.displayName)
-          } catch {
-            // noop
-          }
-
-          // Seed initial participants/tracks (some deployments may not emit USER_JOINED
-          // for existing endpoints in all cases; without this, remotes can stay empty until someone reconnects).
-          try {
-            const ps: any[] = conf.getParticipants?.() ?? []
-            for (const p of ps) {
-              const id = String(p?.getId?.() ?? p?.id ?? p?._id ?? '').trim()
-              if (!id) continue
-              const dn = String(p?.getDisplayName?.() ?? p?.getName?.() ?? p?.displayName ?? '').trim()
-              participantNameRef.current.set(id, dn || id)
+          const onDisplayNameChanged = (id: string, displayName: string) => {
+            if (typeof displayName === 'string' && displayName.trim()) {
+              participantNameRef.current.set(id, displayName.trim())
+              rebuildRemotes()
             }
-          } catch {
-            // noop
           }
-          try {
-            const ts: any[] = conf.getRemoteTracks?.() ?? []
-            for (const t of ts) {
-              if (!t || t.isLocal?.()) continue
-              const pid = String(t.getParticipantId?.() ?? '').trim()
-              if (!pid) continue
-              const list = remoteTracksRef.current.get(pid) ?? []
-              if (!list.includes(t)) remoteTracksRef.current.set(pid, [...list, t])
+
+          const onTrackAdded = (track: any) => {
+            if (!track || track.isLocal?.()) return
+            const pid = track.getParticipantId?.()
+            if (!pid) return
+            try {
+              const p = conf.getParticipantById?.(pid)
+              const n = p?.getDisplayName?.() ?? p?.getName?.() ?? ''
+              if (typeof n === 'string' && n.trim()) participantNameRef.current.set(pid, n.trim())
+            } catch {
+              // noop
             }
-          } catch {
-            // noop
+            const list = remoteTracksRef.current.get(pid) ?? []
+            remoteTracksRef.current.set(pid, [...list, track])
+            rebuildRemotes()
           }
-          rebuildRemotes()
-          syncLocalRole(conf)
-
-          // Poll local role after join: role may be updated asynchronously after join/focus reconnect.
-          if (params.mode === 'host') {
-            if (rolePollTimerRef.current !== null) window.clearInterval(rolePollTimerRef.current)
-            rolePollTimerRef.current = window.setInterval(() => {
-              if (disposed) return
-              syncLocalRole(conf)
-            }, 1500)
-          }
-          applyReceiverConstraints()
-        })
-
-        conf.join?.()
-
-        // local audio for intercom
-        if (shouldEnableLocalAudio) {
-          try {
-            Promise.resolve(
-              JitsiMeetJS.createLocalTracks?.({ devices: ['audio'], audio: true, video: false }),
+          const onTrackRemoved = (track: any) => {
+            if (!track || track.isLocal?.()) return
+            const pid = track.getParticipantId?.()
+            if (!pid) return
+            const list = remoteTracksRef.current.get(pid) ?? []
+            remoteTracksRef.current.set(
+              pid,
+              list.filter((t) => t !== track),
             )
-              .then((tracks: any[]) => {
-                if (disposed) return
-                const audioTrack = tracks?.find?.((t: any) => t?.getType?.() === 'audio') ?? null
-                if (!audioTrack) return
-                localAudioRef.current = audioTrack
-                try {
-                  audioTrack.mute?.()
-                } catch {
-                  // noop
-                }
-                setState((s) => ({ ...s, micMuted: true }))
-                try {
-                  conf.addTrack?.(audioTrack)
-                } catch {
-                  // noop
-                }
+            rebuildRemotes()
+          }
 
-                const onMuteChanged = (e: any) => {
-                  const muted = !!e?.muted
-                  setState((s) => ({ ...s, micMuted: muted }))
-                }
-                audioTrack.on?.(trackEvents?.TRACK_MUTE_CHANGED ?? 'track.trackMuteChanged', onMuteChanged)
-              })
-              .catch(() => {})
-          } catch {
-            // noop
+          conf.on?.(confEvents?.USER_JOINED ?? 'conference.userJoined', onUserJoined)
+          conf.on?.(confEvents?.USER_LEFT ?? 'conference.userLeft', onUserLeft)
+          conf.on?.(confEvents?.DISPLAY_NAME_CHANGED ?? 'conference.displayNameChanged', onDisplayNameChanged)
+          conf.on?.(confEvents?.TRACK_ADDED ?? 'conference.trackAdded', onTrackAdded)
+          conf.on?.(confEvents?.TRACK_REMOVED ?? 'conference.trackRemoved', onTrackRemoved)
+          conf.on?.(confEvents?.CONFERENCE_FAILED ?? 'conference.failed', onConferenceFailed)
+
+          const roleChangedEvt =
+            confEvents?.LOCAL_ROLE_CHANGED ?? confEvents?.ROLE_CHANGED ?? 'conference.localRoleChanged'
+          const onLocalRoleChanged = () => {
+            if (disposed) return
+            syncLocalRole(conf)
+          }
+          // Some deployments emit different event names; subscribe to multiple best-effort variants.
+          conf.on?.(roleChangedEvt, onLocalRoleChanged)
+          conf.on?.(confEvents?.ROLE_CHANGED ?? 'conference.roleChanged', onLocalRoleChanged)
+          conf.on?.(confEvents?.USER_ROLE_CHANGED ?? 'conference.userRoleChanged', onLocalRoleChanged)
+          conf.on?.('conference.localRoleChanged', onLocalRoleChanged)
+
+          // Lobby (best-effort)
+          const lobbyUserJoinedEvt = confEvents?.LOBBY_USER_JOINED ?? 'conference.lobbyUserJoined'
+          const lobbyUserLeftEvt = confEvents?.LOBBY_USER_LEFT ?? 'conference.lobbyUserLeft'
+          const lobbyAccessGrantedEvt = confEvents?.LOBBY_ACCESS_GRANTED ?? 'conference.lobbyAccessGranted'
+          const lobbyAccessDeniedEvt = confEvents?.LOBBY_ACCESS_DENIED ?? 'conference.lobbyAccessDenied'
+
+          const shouldApprove = (displayName: string) => {
+            if (!params.lobby?.allowNames || params.lobby.allowNames.length === 0) return true
+            return params.lobby.allowNames.includes(displayName)
+          }
+
+          const onLobbyUserJoined = (e: any) => {
+            const id = String(e?.id ?? e?.participantId ?? '')
+            const dn = String(e?.displayName ?? e?.name ?? '').trim() || id
+            if (!id) return
+            lobbyPendingRef.current.set(id, dn)
+            rebuildRemotes()
+            if (params.mode === 'host' && params.lobby?.autoApprove !== false) {
+              if (shouldApprove(dn)) void approveLobbyAccess(id)
+            }
+          }
+          const onLobbyUserLeft = (e: any) => {
+            const id = String(e?.id ?? e?.participantId ?? '')
+            if (!id) return
+            lobbyPendingRef.current.delete(id)
+            rebuildRemotes()
+          }
+          const onLobbyGranted = () => {
+            setLobbyStatus('approved', null)
+            try {
+              conf.join?.()
+            } catch {
+              // noop
+            }
+          }
+          const onLobbyDenied = () => {
+            setLobbyStatus('denied', '導播拒絕加入')
+          }
+
+          conf.on?.(lobbyUserJoinedEvt, onLobbyUserJoined)
+          conf.on?.(lobbyUserLeftEvt, onLobbyUserLeft)
+          conf.on?.(lobbyAccessGrantedEvt, onLobbyGranted)
+          conf.on?.(lobbyAccessDeniedEvt, onLobbyDenied)
+
+          conf.on?.(confEvents?.CONFERENCE_JOINED ?? 'conference.joined', () => {
+            if (disposed) return
+            setState((s) => ({ ...s, status: 'joined', error: null }))
+            setLobbyStatus('off', null)
+            attemptRef.current = 0
+            try {
+              conf.setDisplayName?.(params.displayName)
+            } catch {
+              // noop
+            }
+
+            // Seed initial participants/tracks (some deployments may not emit USER_JOINED
+            // for existing endpoints in all cases; without this, remotes can stay empty until someone reconnects).
+            try {
+              const ps: any[] = conf.getParticipants?.() ?? []
+              for (const p of ps) {
+                const id = String(p?.getId?.() ?? p?.id ?? p?._id ?? '').trim()
+                if (!id) continue
+                const dn = String(p?.getDisplayName?.() ?? p?.getName?.() ?? p?.displayName ?? '').trim()
+                participantNameRef.current.set(id, dn || id)
+              }
+            } catch {
+              // noop
+            }
+            try {
+              const ts: any[] = conf.getRemoteTracks?.() ?? []
+              for (const t of ts) {
+                if (!t || t.isLocal?.()) continue
+                const pid = String(t.getParticipantId?.() ?? '').trim()
+                if (!pid) continue
+                const list = remoteTracksRef.current.get(pid) ?? []
+                if (!list.includes(t)) remoteTracksRef.current.set(pid, [...list, t])
+              }
+            } catch {
+              // noop
+            }
+            rebuildRemotes()
+            syncLocalRole(conf)
+
+            // Poll local role after join: role may be updated asynchronously after join/focus reconnect.
+            if (params.mode === 'host') {
+              if (rolePollTimerRef.current !== null) window.clearInterval(rolePollTimerRef.current)
+              rolePollTimerRef.current = window.setInterval(() => {
+                if (disposed) return
+                syncLocalRole(conf)
+              }, 1500)
+            }
+            applyReceiverConstraints()
+          })
+
+          conf.join?.()
+
+          // local audio for intercom
+          if (shouldEnableLocalAudio) {
+            try {
+              Promise.resolve(
+                JitsiMeetJS.createLocalTracks?.({ devices: ['audio'], audio: true, video: false }),
+              )
+                .then((tracks: any[]) => {
+                  if (disposed) return
+                  const audioTrack = tracks?.find?.((t: any) => t?.getType?.() === 'audio') ?? null
+                  if (!audioTrack) return
+                  localAudioRef.current = audioTrack
+                  try {
+                    audioTrack.mute?.()
+                  } catch {
+                    // noop
+                  }
+                  setState((s) => ({ ...s, micMuted: true }))
+                  try {
+                    conf.addTrack?.(audioTrack)
+                  } catch {
+                    // noop
+                  }
+
+                  const onMuteChanged = (e: any) => {
+                    const muted = !!e?.muted
+                    setState((s) => ({ ...s, micMuted: muted }))
+                  }
+                  audioTrack.on?.(trackEvents?.TRACK_MUTE_CHANGED ?? 'track.trackMuteChanged', onMuteChanged)
+                })
+                .catch(() => { })
+            } catch {
+              // noop
+            }
           }
         }
-      }
 
-      const connectionEvents = JitsiMeetJS.events?.connection
-      connection.addEventListener?.(connectionEvents?.CONNECTION_ESTABLISHED ?? 'connection.connectionEstablished', onConnSuccess)
-      connection.addEventListener?.(connectionEvents?.CONNECTION_FAILED ?? 'connection.connectionFailed', onConnFailed)
-      connection.addEventListener?.(connectionEvents?.CONNECTION_DISCONNECTED ?? 'connection.connectionDisconnected', onConnDisconnected)
+        const connectionEvents = JitsiMeetJS.events?.connection
+        connection.addEventListener?.(connectionEvents?.CONNECTION_ESTABLISHED ?? 'connection.connectionEstablished', onConnSuccess)
+        connection.addEventListener?.(connectionEvents?.CONNECTION_FAILED ?? 'connection.connectionFailed', onConnFailed)
+        connection.addEventListener?.(connectionEvents?.CONNECTION_DISCONNECTED ?? 'connection.connectionDisconnected', onConnDisconnected)
 
-      connection.connect?.()
-    })().catch((e) => {
-      if (!disposed) setState((s) => ({ ...s, status: 'error', error: e instanceof Error ? e.message : String(e) }))
-    })
+        connection.connect?.()
+      })().catch((e) => {
+        if (!disposed) setState((s) => ({ ...s, status: 'error', error: e instanceof Error ? e.message : String(e) }))
+      })
 
     return () => {
       disposed = true
