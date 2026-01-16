@@ -49,43 +49,7 @@ export function Admin() {
   const [shareBaseUrl, setShareBaseUrl] = useState(() => window.location.origin)
   useEffect(() => setMarqueeText(state.marquee.text), [state.marquee.text])
 
-  /*
-  const openJitsiAuthPopup = () => {
-    const domain = ((import.meta.env.VITE_JITSI_DOMAIN as string | undefined) ?? 'meet.jit.si')
-      .replace(/^https?:\/\//, '')
-      .replace(/\/+$/, '')
-    const roomName = encodeURIComponent(normalizeOpsId(state.session.room) || 'ops01')
-    const url = `https://${domain}/${roomName}`
-
-    const w = 420
-    const h = 720
-    const y = window.screenY + Math.max(0, (window.outerHeight - h) / 2)
-    const x = window.screenX + Math.max(0, (window.outerWidth - w) / 2)
-    const features = `popup=yes,width=${w},height=${h},left=${Math.round(x)},top=${Math.round(y)}`
-
-    const win = window.open(url, 'liveops-jitsi-auth', features)
-    if (!win) {
-      setAuthHint('無法開啟認證視窗：請允許瀏覽器彈出視窗（popup）。')
-      return
-    }
-
-    setAuthHint(null)
-    setAuthPopupOpen(true)
-
-    const timer = window.setInterval(() => {
-      if (win.closed) {
-        window.clearInterval(timer)
-        setAuthPopupOpen(false)
-        setSdkEnabled(false)
-        window.setTimeout(() => setSdkEnabled(true), 80)
-        setHostReady(true, 'Admin')
-        setAuthHint(
-                  '已關閉原生會議室：系統已自動重連並等待偵測主持人權限（Moderator）。若 10 秒內仍未取得，請再開啟原生會議室登入一次或稍後重試（伺服器可能暫態 service-unavailable）。',
-        )
-      }
-    }, 500)
-  }
-  */
+  // LiveOPS 目前只支援 8x8 JaaS（8x8.vc + JWT）。
 
   const meetingCode = opsId || normalizeOpsId(state.session.opsId)
   const opsRoom = useMemo(() => normalizeOpsId(state.session.room || meetingCode), [meetingCode, state.session.room])

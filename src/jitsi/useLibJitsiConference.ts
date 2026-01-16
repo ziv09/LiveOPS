@@ -235,8 +235,8 @@ export function useLibJitsiConference(params: {
     }
   }
 
-  // meet.jit.si 對 SDK 的 lobby/membersOnly 規則會依房間狀態變動；
-  // 此處以「membersOnly => 等待主持人就位後自動重連」策略處理，避免依賴 joinLobby API。
+  // Public deployments (or JaaS) may enable lobby/membersOnly depending on room state;
+  // use a resilient "membersOnly => stay in lobby / wait for host approval" strategy.
 
   useEffect(() => {
     if (!params.enabled) return
@@ -285,13 +285,12 @@ export function useLibJitsiConference(params: {
       const maxAttempts =
         typeof defaults.maxAttempts === 'number'
           ? defaults.maxAttempts
-          : 0 // default: keep retrying for meet.jit.si transient failures
+          : 0 // default: keep retrying for transient failures
       const r = String(reason ?? '')
       const isServiceUnavailable =
         r.includes('service-unavailable') ||
         r.includes('service unavailable') ||
         r.includes('conference request') ||
-        r.includes('focus.meet.jit.si') ||
         r.includes('Data frame received after close')
 
       const baseDelay =
@@ -318,7 +317,7 @@ export function useLibJitsiConference(params: {
       setState((s) => ({
         ...s,
         status: 'connecting',
-        error: `meet.jit.si 暫時不穩，正在自動重試（${attemptRef.current}${
+        error: `伺服器暫時不穩，正在自動重試（${attemptRef.current}${
           maxAttempts > 0 ? `/${maxAttempts}` : ''
         }）：${reason}`,
       }))
@@ -523,7 +522,7 @@ export function useLibJitsiConference(params: {
             // noop
           }
 
-          // Seed initial participants/tracks (when joining an already-active room, meet.jit.si may not emit USER_JOINED
+          // Seed initial participants/tracks (some deployments may not emit USER_JOINED
           // for existing endpoints in all cases; without this, remotes can stay empty until someone reconnects).
           try {
             const ps: any[] = conf.getParticipants?.() ?? []
@@ -551,7 +550,7 @@ export function useLibJitsiConference(params: {
           rebuildRemotes()
           syncLocalRole(conf)
 
-          // Poll local role after join: meet.jit.si may update role after native login or focus reconnect.
+          // Poll local role after join: role may be updated asynchronously after join/focus reconnect.
           if (params.mode === 'host') {
             if (rolePollTimerRef.current !== null) window.clearInterval(rolePollTimerRef.current)
             rolePollTimerRef.current = window.setInterval(() => {
