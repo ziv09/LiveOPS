@@ -46,6 +46,16 @@ export function useJaasGatekeeper(params: {
     }
   }, [])
 
+  // Reset hasStartedRef when key parameters change so new token can be fetched
+  const paramsKey = `${ops}|${displayName}|${params.requestedRole}`
+  const lastParamsKeyRef = useRef<string>('')
+  useEffect(() => {
+    if (lastParamsKeyRef.current !== paramsKey) {
+      lastParamsKeyRef.current = paramsKey
+      hasStartedRef.current = false
+    }
+  }, [paramsKey])
+
   useEffect(() => {
     if (!params.enabled) return
     if (!ops || !displayName) return
@@ -97,6 +107,7 @@ export function useJaasGatekeeper(params: {
 
             if (!token) throw new Error('Token 取得失敗（空值）')
 
+            console.log('[JaasGatekeeper] Token received, setting status to ready')
             setRes({ status: 'ready', error: null, token, slotId: slotId || null, counts })
             scheduleRefresh()
 

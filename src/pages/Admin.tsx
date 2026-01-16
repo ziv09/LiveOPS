@@ -202,7 +202,7 @@ export function Admin() {
     enabled: !!opsId && authed && gate.status === 'ready',
     mode: 'host',
     enableLocalAudio: false,
-    lobby: { enabled: true, autoApprove: false },
+    lobby: { enabled: false, autoApprove: true },
   })
 
   const collectorQrUrl = useMemo(() => {

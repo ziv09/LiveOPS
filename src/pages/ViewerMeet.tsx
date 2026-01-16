@@ -151,42 +151,6 @@ export function ViewerMeet() {
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
-  if (!authed) {
-    return (
-      <div className="grid min-h-full place-items-center bg-neutral-950 p-6 text-neutral-100">
-        <div className="max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/30 p-5">
-          <div className="text-lg font-semibold">尚未登入</div>
-          <div className="mt-2 text-sm text-neutral-300">請從首頁選擇「一般監看」並輸入密碼後進入。</div>
-          <button
-            className="mt-4 h-10 rounded-lg bg-neutral-100 px-3 text-sm font-semibold text-neutral-950 hover:bg-white"
-            onClick={() => navigate('/')}
-          >
-            返回首頁
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  if (!opsId) {
-    return (
-      <div className="grid min-h-full place-items-center bg-neutral-950 p-6 text-neutral-100">
-        <div className="max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/30 p-5">
-          <div className="text-lg font-semibold">缺少會議碼</div>
-          <div className="mt-2 text-sm text-neutral-300">請從首頁輸入會議碼（OPSxx）後進入。</div>
-          <button
-            className="mt-4 h-10 rounded-lg bg-neutral-100 px-3 text-sm font-semibold text-neutral-950 hover:bg-white"
-            onClick={() => navigate('/')}
-          >
-            返回首頁
-          </button>
-        </div>
-      </div>
-    )
-  }
-
-  const showProgram = state.conference.started
-
   const mtvSlot = state.routing.mtv[mtvPage] ?? state.routing.mtv[0]
   const pageStart = sourcePage * pageSize
   const visibleSourceSlots = state.routing.source.slice(pageStart, pageStart + pageSize)
@@ -204,9 +168,10 @@ export function ViewerMeet() {
     opsId: opsRoom,
     displayName: name,
     requestedRole: 'viewer',
-    enabled: true,
+    enabled: !!opsId && authed,
   })
 
+  // Determine if conference should be enabled
   const enabled = gate.status === 'ready'
 
   const { state: confState, api } = useLibJitsiConference({
@@ -214,54 +179,10 @@ export function ViewerMeet() {
     displayName: name,
     jwt: gate.token,
     enabled,
+    lobby: { enabled: false },
   })
 
-  if (gate.status === 'auth' || gate.status === 'issuing') {
-    return (
-      <div className="relative h-full w-full bg-neutral-950 text-neutral-100">
-        <div className="absolute inset-0 grid place-items-center p-6">
-          <div className="max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/30 p-5 text-center">
-            <div className="text-lg font-semibold">正在取得入場憑證...</div>
-            <div className="mt-2 text-sm text-neutral-300">正在向伺服器驗票並鎖定名額（25 MAU）。</div>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (gate.status === 'error') {
-    return (
-      <div className="relative h-full w-full bg-neutral-950 text-neutral-100">
-        <div className="absolute inset-0 grid place-items-center p-6">
-          <div className="max-w-md rounded-2xl border border-red-500/30 bg-red-950/30 p-5">
-            <div className="text-lg font-semibold text-red-100">入場失敗</div>
-            <div className="mt-2 text-sm text-red-200 break-words">{gate.error || '無法取得入場 Token。'}</div>
-            <button
-              className="mt-4 h-10 w-full rounded-lg bg-neutral-100 px-3 text-sm font-semibold text-neutral-950 hover:bg-white"
-              onClick={() => navigate('/')}
-            >
-              返回首頁
-            </button>
-          </div>
-        </div>
-      </div>
-    )
-  }
-
-  if (!showProgram && confState.lobby.status === 'off') {
-    return (
-      <div className="relative h-full w-full bg-neutral-950">
-        <div className="absolute inset-0 grid place-items-center">
-          <img
-            src="/vite-full-white.svg"
-            alt="LiveOPS"
-            className="w-504 max-w-[90vw] opacity-90 md:w-72"
-            draggable={false}
-          />
-        </div>
-      </div>
-    )
-  }
+  const showProgram = state.conference.started
 
   const nameToRemote = useMemo(() => {
     const m = new Map<string, { id: string; videoTrack: any | null; audioTrack: any | null }>()
@@ -320,6 +241,92 @@ export function ViewerMeet() {
   useEffect(() => setMtvPage((p) => Math.min(p, Math.max(0, state.routing.mtv.length - 1))), [state.routing.mtv.length])
 
   const allRemoteAudios = useMemo(() => confState.remotes.map((r) => ({ id: r.id, track: r.audioTrack })), [confState.remotes])
+
+  // --- GUARDS (Conditional Returns) ---
+  // Must be placed AFTER all hooks to follow React Rules of Hooks
+
+  if (!authed) {
+    return (
+      <div className="grid min-h-full place-items-center bg-neutral-950 p-6 text-neutral-100">
+        <div className="max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/30 p-5">
+          <div className="text-lg font-semibold">尚未登入</div>
+          <div className="mt-2 text-sm text-neutral-300">請從首頁選擇「一般監看」並輸入密碼後進入。</div>
+          <button
+            className="mt-4 h-10 rounded-lg bg-neutral-100 px-3 text-sm font-semibold text-neutral-950 hover:bg-white"
+            onClick={() => navigate('/')}
+          >
+            返回首頁
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (!opsId) {
+    return (
+      <div className="grid min-h-full place-items-center bg-neutral-950 p-6 text-neutral-100">
+        <div className="max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/30 p-5">
+          <div className="text-lg font-semibold">缺少會議碼</div>
+          <div className="mt-2 text-sm text-neutral-300">請從首頁輸入會議碼（OPSxx）後進入。</div>
+          <button
+            className="mt-4 h-10 rounded-lg bg-neutral-100 px-3 text-sm font-semibold text-neutral-950 hover:bg-white"
+            onClick={() => navigate('/')}
+          >
+            返回首頁
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  if (gate.status === 'auth' || gate.status === 'issuing') {
+    return (
+      <div className="relative h-full w-full bg-neutral-950 text-neutral-100">
+        <div className="absolute inset-0 grid place-items-center p-6">
+          <div className="max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/30 p-5 text-center">
+            <div className="text-lg font-semibold">正在取得入場憑證...</div>
+            <div className="mt-2 text-sm text-neutral-300">正在向伺服器驗票並鎖定名額（25 MAU）。</div>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (gate.status === 'error') {
+    return (
+      <div className="relative h-full w-full bg-neutral-950 text-neutral-100">
+        <div className="absolute inset-0 grid place-items-center p-6">
+          <div className="max-w-md rounded-2xl border border-red-500/30 bg-red-950/30 p-5">
+            <div className="text-lg font-semibold text-red-100">入場失敗</div>
+            <div className="mt-2 text-sm text-red-200 break-words">{gate.error || '無法取得入場 Token。'}</div>
+            <button
+              className="mt-4 h-10 w-full rounded-lg bg-neutral-100 px-3 text-sm font-semibold text-neutral-950 hover:bg-white"
+              onClick={() => navigate('/')}
+            >
+              返回首頁
+            </button>
+          </div>
+        </div>
+      </div>
+    )
+  }
+
+  if (!showProgram && confState.lobby.status === 'off') {
+    return (
+      <div className="relative h-full w-full bg-neutral-950">
+        <div className="absolute inset-0 grid place-items-center">
+          <img
+            src="/vite-full-white.svg"
+            alt="LiveOPS"
+            className="w-504 max-w-[90vw] opacity-90 md:w-72"
+            draggable={false}
+          />
+        </div>
+      </div>
+    )
+  }
+
+  // --- Main Render ---
 
   return (
     <div className="relative h-full w-full bg-neutral-950 text-neutral-100">

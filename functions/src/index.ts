@@ -216,6 +216,8 @@ export const issueJaasToken = onCall(
       moderator,
     })
 
+    console.log(`[issueJaasToken] Generated token for room: '${ops}', role: '${alloc.role}', mod: ${moderator}, sub: '${tenantId}'`)
+
     return {
       ops,
       role: alloc.role,

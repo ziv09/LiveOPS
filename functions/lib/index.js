@@ -177,6 +177,7 @@ export const issueJaasToken = onCall({ secrets: [JAAS_PRIVATE_KEY, JAAS_KID, JAA
         displayName,
         moderator,
     });
+    console.log(`[issueJaasToken] Generated token for room: '${ops}', role: '${alloc.role}', mod: ${moderator}, sub: '${tenantId}'`);
     return {
         ops,
         role: alloc.role,
