@@ -195,14 +195,13 @@ export function Admin() {
     window.open(url, '_blank', 'noopener,noreferrer')
   }
 
-  const { state: adminConfState, api: adminConfApi } = useLibJitsiConference({
+  const { state: adminConfState } = useLibJitsiConference({
     room,
     displayName: adminDisplayName,
     jwt: gate.token,
     enabled: !!opsId && authed && gate.status === 'ready',
     mode: 'host',
     enableLocalAudio: false,
-    lobby: { enabled: false, autoApprove: true },
   })
 
   const collectorQrUrl = useMemo(() => {
@@ -665,48 +664,6 @@ export function Admin() {
             <TokenStatusPanel opsId={opsRoom} />
           </div>
 
-          <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4">
-            <div className="mb-2 text-sm font-semibold">等候室名單（手動審核）</div>
-            <div className="text-xs text-neutral-400">
-              若採集端/監看端顯示「導播確認身分中...」，代表正在等候室等待你審核。
-            </div>
-            <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-950/30 p-3 text-[11px] text-neutral-200">
-              {adminConfState.lobbyPending.length === 0 ? (
-                <div className="text-neutral-500">目前等候室 0 人</div>
-              ) : (
-                <div className="flex flex-col gap-2">
-                  {adminConfState.lobbyPending.map((p) => (
-                    <div
-                      key={p.id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-neutral-800 bg-neutral-950/40 px-2 py-1"
-                    >
-                      <div className="min-w-0 max-w-[260px] truncate">
-                        {p.displayName} · {p.id.slice(0, 8)}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button
-                          className="rounded-md border border-emerald-900/60 bg-emerald-950/40 px-2 py-0.5 text-emerald-200 hover:border-emerald-700"
-                          onClick={() => adminConfApi.approveLobbyAccess(p.id)}
-                        >
-                          同意
-                        </button>
-                        <button
-                          className="rounded-md border border-rose-900/60 bg-rose-950/40 px-2 py-0.5 text-rose-200 hover:border-rose-700"
-                          onClick={() => adminConfApi.denyLobbyAccess(p.id)}
-                        >
-                          拒絕
-                        </button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-            <div className="mt-2 text-[11px] text-neutral-500">
-              Admin SDK：{adminConfState.status}
-              {adminConfState.error ? <span className="text-amber-200">（{adminConfState.error}）</span> : null}
-            </div>
-          </div>
 
           <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4">
             <div className="mb-2 text-sm font-semibold">參與者狀態（SDK 即時）</div>
@@ -730,8 +687,8 @@ export function Admin() {
               {adminConfState.error ? <span className="text-amber-200">（{adminConfState.error}）</span> : null}
             </div>
           </div>
-        </div>
-      </div>
-    </div>
+        </div >
+      </div >
+    </div >
   )
 }

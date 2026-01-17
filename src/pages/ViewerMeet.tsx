@@ -179,7 +179,6 @@ export function ViewerMeet() {
     displayName: name,
     jwt: gate.token,
     enabled,
-    lobby: { enabled: false },
   })
 
   const showProgram = state.conference.started
@@ -267,7 +266,7 @@ export function ViewerMeet() {
       <div className="grid min-h-full place-items-center bg-neutral-950 p-6 text-neutral-100">
         <div className="max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/30 p-5">
           <div className="text-lg font-semibold">缺少會議碼</div>
-          <div className="mt-2 text-sm text-neutral-300">請從首頁輸入會議碼（OPSxx）後進入。</div>
+          <div className="mt-2 text-sm text-neutral-300">請從首頁輸入會議碼後進入。</div>
           <button
             className="mt-4 h-10 rounded-lg bg-neutral-100 px-3 text-sm font-semibold text-neutral-950 hover:bg-white"
             onClick={() => navigate('/')}
@@ -284,8 +283,8 @@ export function ViewerMeet() {
       <div className="relative h-full w-full bg-neutral-950 text-neutral-100">
         <div className="absolute inset-0 grid place-items-center p-6">
           <div className="max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/30 p-5 text-center">
-            <div className="text-lg font-semibold">正在取得入場憑證...</div>
-            <div className="mt-2 text-sm text-neutral-300">正在向伺服器驗票並鎖定名額（25 MAU）。</div>
+            <div className="text-lg font-semibold">正在取得權限...</div>
+            <div className="mt-2 text-sm text-neutral-300">登入中...。</div>
           </div>
         </div>
       </div>
@@ -297,8 +296,8 @@ export function ViewerMeet() {
       <div className="relative h-full w-full bg-neutral-950 text-neutral-100">
         <div className="absolute inset-0 grid place-items-center p-6">
           <div className="max-w-md rounded-2xl border border-red-500/30 bg-red-950/30 p-5">
-            <div className="text-lg font-semibold text-red-100">入場失敗</div>
-            <div className="mt-2 text-sm text-red-200 break-words">{gate.error || '無法取得入場 Token。'}</div>
+            <div className="text-lg font-semibold text-red-100">登入失敗</div>
+            <div className="mt-2 text-sm text-red-200 break-words">{gate.error || '無法取得 Token。'}</div>
             <button
               className="mt-4 h-10 w-full rounded-lg bg-neutral-100 px-3 text-sm font-semibold text-neutral-950 hover:bg-white"
               onClick={() => navigate('/')}
@@ -311,7 +310,7 @@ export function ViewerMeet() {
     )
   }
 
-  if (!showProgram && confState.lobby.status === 'off') {
+  if (!showProgram) {
     return (
       <div className="relative h-full w-full bg-neutral-950">
         <div className="absolute inset-0 grid place-items-center">
@@ -356,35 +355,6 @@ export function ViewerMeet() {
         {sync.error ? <div className="mt-1 text-neutral-300">{sync.error}</div> : null}
         {gate.error ? <div className="mt-1 text-neutral-300">{gate.error}</div> : null}
       </div>
-
-      {(confState.lobby.status === 'joining' || confState.lobby.status === 'waiting') && (
-        <div className="absolute inset-0 z-40 grid place-items-center bg-neutral-950/80 backdrop-blur">
-          <div className="w-full max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/40 p-6 text-center">
-            <div className="text-lg font-semibold">導播確認身分中...</div>
-            <div className="mt-2 text-sm text-neutral-300">
-              {confState.lobby.message || '你已進入等候室，請稍候導播放行。'}
-            </div>
-            <div className="mt-5 flex justify-center">
-              <div className="h-8 w-8 animate-spin rounded-full border-2 border-neutral-700 border-t-neutral-200" />
-            </div>
-          </div>
-        </div>
-      )}
-
-      {confState.lobby.status === 'denied' && (
-        <div className="absolute inset-0 z-40 grid place-items-center bg-neutral-950/80 backdrop-blur">
-          <div className="w-full max-w-md rounded-2xl border border-neutral-800 bg-neutral-900/40 p-6 text-center">
-            <div className="text-lg font-semibold">無法加入會議</div>
-            <div className="mt-2 text-sm text-neutral-300">{confState.lobby.message || '導播拒絕加入。'}</div>
-            <button
-              className="mt-5 h-10 rounded-lg bg-neutral-100 px-4 text-sm font-semibold text-neutral-950 hover:bg-white"
-              onClick={() => navigate('/')}
-            >
-              返回首頁
-            </button>
-          </div>
-        </div>
-      )}
 
       {/* remote audio renderers */}
       <div className="fixed left-0 top-0 h-px w-px overflow-hidden opacity-0">
@@ -569,7 +539,7 @@ export function ViewerMeet() {
             onClick={() => setAudioPanelOpen((v) => !v)}
             title="通話控制"
           >
-            音
+            mic
           </button>
         </div>
       </div>

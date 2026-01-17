@@ -204,18 +204,18 @@ export function Viewer() {
 
   useEffect(() => {
     if (!audioPanelOpen) return
-    ;(async () => {
-      try {
-        const list = await navigator.mediaDevices.enumerateDevices()
-        const inputs = list
-          .filter((d) => d.kind === 'audioinput')
-          .map((d) => ({ deviceId: d.deviceId, label: d.label }))
-        setAudioInputs(inputs)
-        if (!selectedAudioInput && inputs[0]?.deviceId) setSelectedAudioInput(inputs[0].deviceId)
-      } catch {
-        setAudioInputs([])
-      }
-    })()
+      ; (async () => {
+        try {
+          const list = await navigator.mediaDevices.enumerateDevices()
+          const inputs = list
+            .filter((d) => d.kind === 'audioinput')
+            .map((d) => ({ deviceId: d.deviceId, label: d.label }))
+          setAudioInputs(inputs)
+          if (!selectedAudioInput && inputs[0]?.deviceId) setSelectedAudioInput(inputs[0].deviceId)
+        } catch {
+          setAudioInputs([])
+        }
+      })()
   }, [audioPanelOpen, selectedAudioInput])
 
   const totalSourcePages = Math.max(1, Math.ceil(state.routing.source.length / pageSize))
@@ -523,7 +523,7 @@ export function Viewer() {
                     onChange={(e) => {
                       const id = e.target.value
                       setSelectedAudioInput(id)
-                      intercomApiRef.current?.setAudioInputDevice?.(id).catch?.(() => {})
+                      intercomApiRef.current?.setAudioInputDevice?.(id).catch?.(() => { })
                     }}
                     className="h-10 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
                   >
@@ -547,7 +547,7 @@ export function Viewer() {
             onClick={() => setAudioPanelOpen((v) => !v)}
             title="音訊控制"
           >
-            音
+            mic
           </button>
         </div>
       </div>

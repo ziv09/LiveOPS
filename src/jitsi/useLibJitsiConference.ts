@@ -16,8 +16,6 @@ export type LibJitsiState = {
   remotes: LibJitsiRemote[]
   micMuted: boolean
   localRole: 'moderator' | 'participant' | null
-  lobby: { status: 'off' | 'joining' | 'waiting' | 'approved' | 'denied'; message?: string | null }
-  lobbyPending: Array<{ id: string; displayName: string }>
 }
 
 function pickBestVideoTrack(tracks: any[]): any | null {
@@ -35,11 +33,6 @@ export function useLibJitsiConference(params: {
   mode?: 'viewer' | 'host'
   enableLocalAudio?: boolean
   retry?: { maxAttempts?: number; baseDelayMs?: number; maxDelayMs?: number }
-  lobby?: {
-    enabled?: boolean
-    autoApprove?: boolean
-    allowNames?: string[]
-  }
 }) {
   const [state, setState] = useState<LibJitsiState>({
     status: 'idle',
@@ -47,8 +40,6 @@ export function useLibJitsiConference(params: {
     remotes: [],
     micMuted: true,
     localRole: null,
-    lobby: { status: 'off', message: null },
-    lobbyPending: [],
   })
 
   const domain = useMemo(() => getJitsiDomain(), [])
@@ -63,7 +54,6 @@ export function useLibJitsiConference(params: {
   const participantNameRef = useRef<Map<string, string>>(new Map())
   const remoteTracksRef = useRef<Map<string, any[]>>(new Map())
   const receiverHintRef = useRef<{ high: string[]; visible: string[] }>({ high: [], visible: [] })
-  const lobbyPendingRef = useRef<Map<string, string>>(new Map())
 
   const shouldEnableLocalAudio = params.enableLocalAudio ?? (params.mode === 'host' ? false : true)
 
@@ -84,7 +74,6 @@ export function useLibJitsiConference(params: {
     setState((prev) => ({
       ...prev,
       remotes,
-      lobbyPending: Array.from(lobbyPendingRef.current.entries()).map(([id, displayName]) => ({ id, displayName })),
     }))
   }
 
@@ -97,9 +86,6 @@ export function useLibJitsiConference(params: {
       // noop
     }
     setState((s) => ({ ...s, localRole: role }))
-    if (role === 'moderator' && params.mode === 'host' && params.lobby?.enabled) {
-      void enableLobbyOnConference()
-    }
   }
 
   const normalizedRoom = useMemo(() => {
@@ -156,97 +142,6 @@ export function useLibJitsiConference(params: {
       // noop
     }
   }
-
-  const setLobbyStatus = (status: LibJitsiState['lobby']['status'], message?: string | null) => {
-    setState((s) => ({ ...s, lobby: { status, message: message ?? null } }))
-  }
-
-  const enableLobbyOnConference = async () => {
-    const conf = conferenceRef.current
-    if (!conf) return
-    try {
-      if (typeof conf.enableLobby === 'function') {
-        await conf.enableLobby()
-        return
-      }
-    } catch {
-      // noop
-    }
-    try {
-      if (conf.lobby && typeof conf.lobby.enable === 'function') {
-        await conf.lobby.enable()
-      }
-    } catch {
-      // noop
-    }
-  }
-
-  const approveLobbyAccess = async (id: string) => {
-    const conf = conferenceRef.current
-    if (!conf || !id) return
-    try {
-      if (conf.lobby && typeof conf.lobby.approveAccess === 'function') {
-        await conf.lobby.approveAccess(id)
-        return
-      }
-    } catch {
-      // noop
-    }
-    try {
-      if (typeof conf.approveLobbyAccess === 'function') {
-        await conf.approveLobbyAccess(id)
-        return
-      }
-    } catch {
-      // noop
-    }
-    try {
-      if (typeof conf.lobbyApproveAccess === 'function') {
-        await conf.lobbyApproveAccess(id)
-      }
-    } catch {
-      // noop
-    }
-  }
-
-  const denyLobbyAccess = async (id: string) => {
-    const conf = conferenceRef.current
-    if (!conf || !id) return
-    try {
-      if (conf.lobby && typeof conf.lobby.rejectAccess === 'function') {
-        await conf.lobby.rejectAccess(id)
-        return
-      }
-    } catch {
-      // noop
-    }
-    try {
-      if (conf.lobby && typeof conf.lobby.denyAccess === 'function') {
-        await conf.lobby.denyAccess(id)
-        return
-      }
-    } catch {
-      // noop
-    }
-    try {
-      if (typeof conf.rejectLobbyAccess === 'function') {
-        await conf.rejectLobbyAccess(id)
-        return
-      }
-    } catch {
-      // noop
-    }
-    try {
-      if (typeof conf.lobbyRejectAccess === 'function') {
-        await conf.lobbyRejectAccess(id)
-      }
-    } catch {
-      // noop
-    }
-  }
-
-  // Public deployments (or JaaS) may enable lobby/membersOnly depending on room state;
-  // use a resilient "membersOnly => stay in lobby / wait for host approval" strategy.
 
   useEffect(() => {
     if (!params.enabled) return
@@ -400,16 +295,6 @@ export function useLibJitsiConference(params: {
 
           const onConferenceFailed = (e: any) => {
             if (disposed) return
-            const err = String(e?.error ?? e?.message ?? e ?? '')
-            if (err.includes('membersOnly')) {
-              setLobbyStatus('waiting', '導播確認身分中...（等待主持人就位）')
-              // 手動放行模式：讓 SDK 自己留在 lobby room 敲門，等待主持人核准。
-              // 不要在這裡重連，避免把 lobby 流程打斷。
-              if (params.mode === 'host') {
-                scheduleRestart('membersOnly（主持人尚未就位）', 1500)
-              }
-              return
-            }
             scheduleRestart(`加入會議失敗：${String(e?.message ?? e?.error ?? e ?? '')}`)
           }
 
@@ -476,54 +361,9 @@ export function useLibJitsiConference(params: {
           conf.on?.(confEvents?.USER_ROLE_CHANGED ?? 'conference.userRoleChanged', onLocalRoleChanged)
           conf.on?.('conference.localRoleChanged', onLocalRoleChanged)
 
-          // Lobby (best-effort)
-          const lobbyUserJoinedEvt = confEvents?.LOBBY_USER_JOINED ?? 'conference.lobbyUserJoined'
-          const lobbyUserLeftEvt = confEvents?.LOBBY_USER_LEFT ?? 'conference.lobbyUserLeft'
-          const lobbyAccessGrantedEvt = confEvents?.LOBBY_ACCESS_GRANTED ?? 'conference.lobbyAccessGranted'
-          const lobbyAccessDeniedEvt = confEvents?.LOBBY_ACCESS_DENIED ?? 'conference.lobbyAccessDenied'
-
-          const shouldApprove = (displayName: string) => {
-            if (!params.lobby?.allowNames || params.lobby.allowNames.length === 0) return true
-            return params.lobby.allowNames.includes(displayName)
-          }
-
-          const onLobbyUserJoined = (e: any) => {
-            const id = String(e?.id ?? e?.participantId ?? '')
-            const dn = String(e?.displayName ?? e?.name ?? '').trim() || id
-            if (!id) return
-            lobbyPendingRef.current.set(id, dn)
-            rebuildRemotes()
-            if (params.mode === 'host' && params.lobby?.autoApprove !== false) {
-              if (shouldApprove(dn)) void approveLobbyAccess(id)
-            }
-          }
-          const onLobbyUserLeft = (e: any) => {
-            const id = String(e?.id ?? e?.participantId ?? '')
-            if (!id) return
-            lobbyPendingRef.current.delete(id)
-            rebuildRemotes()
-          }
-          const onLobbyGranted = () => {
-            setLobbyStatus('approved', null)
-            try {
-              conf.join?.()
-            } catch {
-              // noop
-            }
-          }
-          const onLobbyDenied = () => {
-            setLobbyStatus('denied', '導播拒絕加入')
-          }
-
-          conf.on?.(lobbyUserJoinedEvt, onLobbyUserJoined)
-          conf.on?.(lobbyUserLeftEvt, onLobbyUserLeft)
-          conf.on?.(lobbyAccessGrantedEvt, onLobbyGranted)
-          conf.on?.(lobbyAccessDeniedEvt, onLobbyDenied)
-
           conf.on?.(confEvents?.CONFERENCE_JOINED ?? 'conference.joined', () => {
             if (disposed) return
             setState((s) => ({ ...s, status: 'joined', error: null }))
-            setLobbyStatus('off', null)
             attemptRef.current = 0
             try {
               conf.setDisplayName?.(params.displayName)
@@ -651,9 +491,6 @@ export function useLibJitsiConference(params: {
         receiverHintRef.current = { high: highEndpointIds ?? [], visible: visibleEndpointIds ?? [] }
         applyReceiverConstraints()
       },
-      enableLobby: () => enableLobbyOnConference(),
-      approveLobbyAccess: (id: string) => approveLobbyAccess(id),
-      denyLobbyAccess: (id: string) => denyLobbyAccess(id),
       getLocalRole: () => state.localRole,
     }
   }, [state.localRole])
