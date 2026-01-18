@@ -12,6 +12,24 @@ body {
   margin: 0;
 }
 
+/* Global Button Glow Effect */
+@layer components {
+  button:not(:disabled) {
+    @apply transition-all duration-300 ease-out;
+  }
+  
+  button:hover:not(:disabled) {
+    /* White/Blue-ish glow */
+    box-shadow: 0 0 15px rgba(255, 255, 255, 0.15), 0 0 30px rgba(52, 211, 153, 0.1); 
+    text-shadow: 0 0 5px rgba(255, 255, 255, 0.2);
+  }
+
+  button:active:not(:disabled) {
+    transform: scale(0.98);
+    box-shadow: 0 0 10px rgba(255, 255, 255, 0.3), 0 0 20px rgba(52, 211, 153, 0.2);
+  }
+}
+
 /* react-split (Split.js) */
 .gutter {
   background-color: rgb(38 38 38);

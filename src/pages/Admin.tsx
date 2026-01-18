@@ -4,7 +4,7 @@ import { QRCodeCanvas } from 'qrcode.react'
 import { onAuthStateChanged } from 'firebase/auth'
 import { clearAuth, isAuthed } from '../auth/auth'
 import { getFirebaseAuth, getFirebaseDatabase, getFirebaseFunctions } from '../signal/firebase'
-import { onValue, ref } from 'firebase/database'
+import { onValue, ref, set } from 'firebase/database'
 import { httpsCallable } from 'firebase/functions'
 import { useSignal } from '../signal/useSignal'
 import type { RoutingSlotV1, RoutingSourceV1 } from '../signal/types'
@@ -44,7 +44,7 @@ const ALL_SLOTS = [
 ]
 
 function PersonnelStatusPanel(props: { opsId: string; allocations: Record<string, any>; now: number; error: string | null }) {
-  const [isOpen, setIsOpen] = useState(false)
+
 
   const functions = useMemo(() => {
     try {
@@ -99,13 +99,10 @@ function PersonnelStatusPanel(props: { opsId: string; allocations: Record<string
 
   return (
     <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 overflow-hidden">
-      <button
-        className="w-full flex items-center justify-between p-4 hover:bg-neutral-800/30 transition-colors"
-        onClick={() => setIsOpen(!isOpen)}
-      >
+      <div className="w-full flex items-center justify-between p-4 bg-neutral-900/50">
         <div className="flex flex-col items-start gap-1">
           <div className="text-sm font-semibold text-neutral-200">
-            人員狀態（配額與連線）
+            人員狀態列表
             {props.error && <span className="ml-2 text-rose-400 text-xs">⚠️ {props.error}</span>}
           </div>
           <div className="text-xs text-neutral-400">
@@ -114,72 +111,67 @@ function PersonnelStatusPanel(props: { opsId: string; allocations: Record<string
             線上：<span className="text-emerald-400">{stats.online}</span> 人
           </div>
         </div>
-        <div className="text-neutral-500 transform transition-transform duration-200" style={{ transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>
-          ▼
-        </div>
-      </button>
+      </div>
 
-      {isOpen && (
-        <div className="border-t border-neutral-800 bg-neutral-950/40">
-          <div className="max-h-96 overflow-y-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="sticky top-0 bg-neutral-900 text-neutral-400 z-10">
-                <tr>
-                  <th className="px-3 py-2 font-medium">ID</th>
-                  <th className="px-3 py-2 font-medium">身份</th>
-                  <th className="px-3 py-2 font-medium">使用者（系統偵測/配額）</th>
-                  <th className="px-3 py-2 font-medium text-right">操作</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-neutral-800 text-neutral-300">
-                {rows.map((row) => (
-                  <tr key={row.id} className={row.status === 'online' ? 'bg-emerald-950/10' : ''}>
-                    <td className="px-3 py-2 font-mono text-neutral-500">{row.id}</td>
-                    <td className="px-3 py-2">
-                      <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-semibold
-                        ${row.role === 'collector' ? 'bg-blue-950/40 text-blue-300' :
-                          row.role === 'monitor' ? 'bg-purple-950/40 text-purple-300' :
-                            'bg-orange-950/40 text-orange-300'}`}>
-                        {row.role}
+      <div className="border-t border-neutral-800 bg-neutral-950/40">
+        <div className="max-h-[600px] overflow-y-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="sticky top-0 bg-neutral-900 text-neutral-400 z-10">
+              <tr>
+                <th className="px-3 py-2 font-medium">ID</th>
+                <th className="px-3 py-2 font-medium">身份</th>
+                <th className="px-3 py-2 font-medium">使用者（系統偵測/配額）</th>
+                <th className="px-3 py-2 font-medium text-right">操作</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-neutral-800 text-neutral-300">
+              {rows.map((row) => (
+                <tr key={row.id} className={row.status === 'online' ? 'bg-emerald-950/10' : ''}>
+                  <td className="px-3 py-2 font-mono text-neutral-500">{row.id}</td>
+                  <td className="px-3 py-2">
+                    <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-semibold
+                      ${row.role === 'collector' ? 'bg-blue-950/40 text-blue-300' :
+                        row.role === 'monitor' ? 'bg-purple-950/40 text-purple-300' :
+                          'bg-orange-950/40 text-orange-300'}`}>
+                      {row.role}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="flex items-center gap-2">
+                      {row.status === 'online' && <span className="text-emerald-400 text-[10px]">●</span>}
+                      {row.status === 'offline' && <span className="text-amber-400 text-[10px]">●</span>}
+                      {row.status === 'empty' && <span className="text-neutral-700 text-[10px]">○</span>}
+
+                      <span className={row.status === 'empty' ? 'text-neutral-600' : 'text-neutral-200'}>
+                        {row.displayName}
                       </span>
-                    </td>
-                    <td className="px-3 py-2">
-                      <div className="flex items-center gap-2">
-                        {row.status === 'online' && <span className="text-emerald-400 text-[10px]">●</span>}
-                        {row.status === 'offline' && <span className="text-amber-400 text-[10px]">●</span>}
-                        {row.status === 'empty' && <span className="text-neutral-700 text-[10px]">○</span>}
 
-                        <span className={row.status === 'empty' ? 'text-neutral-600' : 'text-neutral-200'}>
-                          {row.displayName}
+                      {row.status === 'offline' && (
+                        <span className="text-[10px] text-amber-500/80">
+                          (已佔用但未連線, {row.lastSeen})
                         </span>
-
-                        {row.status === 'offline' && (
-                          <span className="text-[10px] text-amber-500/80">
-                            (已佔用但未連線, {row.lastSeen})
-                          </span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="px-3 py-2 text-right">
-                      {row.alloc && (
-                        <button
-                          className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-[10px] hover:bg-neutral-700 hover:text-white"
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            handleKick(row.id)
-                          }}
-                        >
-                          釋放
-                        </button>
                       )}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                    </div>
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    {row.alloc && (
+                      <button
+                        className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-[10px] hover:bg-neutral-700 hover:text-white"
+                        onClick={(e) => {
+                          e.stopPropagation()
+                          handleKick(row.id)
+                        }}
+                      >
+                        釋放
+                      </button>
+                    )}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
         </div>
-      )}
+      </div>
     </div>
   )
 }
@@ -197,8 +189,35 @@ export function Admin() {
   const shareBaseUrl = window.location.origin
   useEffect(() => setMarqueeText(state.marquee.text), [state.marquee.text])
 
+  // --- Active Tab State ---
+  const [activeTab, setActiveTab] = useState<'routing' | 'marquee' | 'personnel' | 'time'>('routing')
+
   // --- DB Allocations (Zero-MAU Presence) ---
   const [allocations, setAllocations] = useState<Record<string, any>>({})
+  const [timeControl, setTimeControl] = useState<{ mode: 'auto' | 'manual'; base?: number; display?: number }>({ mode: 'auto' })
+  const [manualInput, setManualInput] = useState(() => {
+    const d = new Date()
+    return { h: d.getHours(), m: d.getMinutes(), s: d.getSeconds() }
+  })
+
+  // Helper for Time Control
+  const applyTimeControl = async (mode: 'auto' | 'manual') => {
+    const db = getFirebaseDatabase()
+    if (!db || !opsId) return
+    const refPath = `liveops/v2/jaas/rooms/${opsId}/state/timeControl`
+
+    if (mode === 'auto') {
+      await set(ref(db, refPath), { mode: 'auto' })
+    } else {
+      const displaySeconds = (manualInput.h * 3600) + (manualInput.m * 60) + manualInput.s
+      await set(ref(db, refPath), {
+        mode: 'manual',
+        base: Date.now(),
+        display: displaySeconds
+      })
+    }
+  }
+
   const [now, setNow] = useState(Date.now())
   const [dbError, setDbError] = useState<string | null>(null)
 
@@ -221,6 +240,7 @@ export function Admin() {
       dbUnsub = onValue(roomRef, (snap) => {
         const val = snap.val()
         setAllocations(val?.allocations ?? {})
+        setTimeControl(val?.timeControl ?? { mode: 'auto' }) // NEW: Sync timeControl
         setDbError(null)
       }, (err) => {
         console.error('[Admin] Allocations permission/network error:', err)
@@ -399,16 +419,28 @@ export function Admin() {
     )
   }
 
+  const TabButton = ({ id, label }: { id: typeof activeTab, label: string }) => (
+    <button
+      onClick={() => setActiveTab(id)}
+      className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors
+        ${activeTab === id
+          ? 'border-emerald-500 text-emerald-400'
+          : 'border-transparent text-neutral-400 hover:text-neutral-200 hover:border-neutral-800'}`}
+    >
+      {label}
+    </button>
+  )
+
   return (
     <div className="min-h-full bg-neutral-950 text-neutral-100">
       <div className="mx-auto max-w-6xl p-4 md:p-6">
+        {/* Top Header */}
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <div className="text-xl font-semibold">戰情室控制台（Admin）</div>
             <div className="text-sm text-neutral-300">
               會議碼：<span className="font-mono">{meetingCode}</span>
-            </div>
-            <div className="text-xs text-neutral-500">
+              <span className="mx-2 text-neutral-600">|</span>
               會議室：<span className="font-mono">{room}</span>
             </div>
             <div className="mt-1 text-xs text-neutral-500">
@@ -426,13 +458,13 @@ export function Admin() {
           </div>
           <div className="flex items-center gap-2">
             <button
-              className="h-10 rounded-lg border border-neutral-800 bg-neutral-900/30 px-3 text-sm hover:border-neutral-600"
+              className="h-9 rounded-lg border border-neutral-800 bg-neutral-900/30 px-3 text-xs hover:border-neutral-600"
               onClick={() => navigate('/')}
             >
               返回首頁
             </button>
             <button
-              className="h-10 rounded-lg border border-neutral-800 bg-neutral-900/30 px-3 text-sm hover:border-neutral-600"
+              className="h-9 rounded-lg border border-neutral-800 bg-neutral-900/30 px-3 text-xs hover:border-neutral-600"
               onClick={() => {
                 clearAuth()
                 navigate('/', { replace: true })
@@ -443,7 +475,8 @@ export function Admin() {
           </div>
         </div>
 
-        <div className="mb-4 rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4">
+        {/* 1. Streaming Status (Fixed Top) */}
+        <div className="mb-6 rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <div className="text-sm font-semibold">串流狀態</div>
@@ -454,13 +487,12 @@ export function Admin() {
               </div>
               {!state.conference.started ? (
                 <div className="mt-2 text-xs text-neutral-400">
-                  「開始串流」只控制 LiveOPS 的節目輸出（Viewer 何時切到格子畫面），不再綁主持人判斷。
-                  若採集端/監看端加入時被擋在等候室，請在下方「等候室」名單手動放行；必要時可用右側「開啟原生會議室」開新分頁除錯。
+                  「開始串流」只控制 LiveOPS 的節目輸出，不再綁主持人判斷。
+                  請在下方「人員狀態」分頁監控連線；必要時可用右側「開啟原生會議室」除錯。
                 </div>
               ) : null}
               <div className="mt-2 text-[11px] text-neutral-500">
                 Sync：{sync.mode}
-                {sync.error ? <span className="text-amber-200">（{sync.error}）</span> : null}
                 <span className="ml-2 text-emerald-400">● Zero-MAU Mode (資料庫直連)</span>
               </div>
             </div>
@@ -530,148 +562,163 @@ export function Admin() {
           ) : null}
         </div>
 
-        <div className="grid gap-4 lg:grid-cols-3">
-          <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4 lg:col-span-2">
-            <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
-              <div>
-                <div className="text-sm font-semibold">路由指派（來源 + 名稱）</div>
-                <div className="text-xs text-neutral-400">
-                  控制台只負責「把會議室內的來源（參與者）」指派到格子；影像來源請一律用「訊號採集端」加入會議室後再回來指派。
-                </div>
-                {Array.from(candidateNameCounts.values()).some((c) => c > 1) ? (
-                  <div className="mt-1 text-xs text-amber-200">
-                    注意：偵測到重複的來源名稱，建議每個採集端名稱保持唯一，避免指派不穩定。
+        {/* 2. Tab Navigation */}
+        <div className="mb-4 flex border-b border-neutral-800">
+          <TabButton id="routing" label="路由指派" />
+          <TabButton id="marquee" label="跑馬燈控制" />
+          <TabButton id="personnel" label="人員狀態" />
+          <TabButton id="time" label="時間控制" />
+        </div>
+
+        {/* 3. Tab Contents */}
+        <div className="min-h-[400px]">
+          {/* Tab: Routing */}
+          {activeTab === 'routing' && (
+            <div className="animate-in fade-in duration-200">
+              <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <div className="text-sm font-semibold">路由指派（來源 + 名稱）</div>
+                  <div className="text-xs text-neutral-400">
+                    控制台只負責「把會議室內的來源（參與者）」指派到格子；影像來源請一律用「訊號採集端」加入會議室後再回來指派。
                   </div>
-                ) : null}
-              </div>
-              <div className="flex items-center gap-2" />
-            </div>
-
-            <div className="grid gap-4 md:grid-cols-2">
-              <div className="rounded-xl border border-neutral-800 bg-neutral-900/30 p-3">
-                <div className="mb-2 text-sm font-semibold">MTV 組</div>
-                <div className="grid gap-3">
-                  {state.routing.mtv.map((slot, idx) => (
-                    <div key={idx} className="grid gap-2 rounded-xl border border-neutral-800 bg-neutral-950/20 p-3">
-                      <div className="text-xs text-neutral-400">MTV {idx + 1}</div>
-                      <label className="grid gap-1">
-                        <div className="text-xs text-neutral-300">名稱</div>
-                        <input
-                          value={slot.title}
-                          onChange={(e) => {
-                            setRouting({
-                              ...state.routing,
-                              mtv: updateSlot(state.routing.mtv, idx, { title: e.target.value }),
-                            })
-                          }}
-                          className="h-10 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
-                          placeholder="例如：MTV 組"
-                        />
-                      </label>
-                      <label className="grid gap-1">
-                        <div className="text-xs text-neutral-300">來源</div>
-                        <select
-                          value={encodeSource(slot.source)}
-                          onChange={(e) => {
-                            const raw = e.target.value
-                            const nextSource = decodeSource(raw)
-                            setRouting({
-                              ...state.routing,
-                              mtv: updateSlot(state.routing.mtv, idx, { source: nextSource }),
-                            })
-                          }}
-                          className="h-10 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
-                        >
-                          <option value="none">（未指派）</option>
-                          <optgroup label="會議室來源（採集端加入）">
-                            {sourceCandidates.map((p) => {
-                              const n = (p.displayName ?? '').trim()
-                              const dup = (candidateNameCounts.get(n) ?? 0) > 1
-                              return (
-                                <option key={p.participantId} value={`name:${encodeURIComponent(n)}`}>
-                                  {dup ? `${n}（重複）` : n} · {p.participantId.slice(0, 8)}
-                                </option>
-                              )
-                            })}
-                          </optgroup>
-                        </select>
-                      </label>
+                  {Array.from(candidateNameCounts.values()).some((c) => c > 1) ? (
+                    <div className="mt-1 text-xs text-amber-200">
+                      注意：偵測到重複的來源名稱，建議每個採集端名稱保持唯一，避免指派不穩定。
                     </div>
-                  ))}
+                  ) : null}
                 </div>
               </div>
 
-              <div className="rounded-xl border border-neutral-800 bg-neutral-950/30 p-3">
-                <div className="mb-2 text-sm font-semibold">Source 組（8 格）</div>
-                <div className="grid gap-3">
-                  {state.routing.source.map((slot, idx) => (
-                    <div key={idx} className="grid gap-2 rounded-xl border border-neutral-800 bg-neutral-950/20 p-3">
-                      <div className="text-xs text-neutral-400">格 {idx + 1}</div>
-                      <label className="grid gap-1">
-                        <div className="text-xs text-neutral-300">名稱</div>
-                        <input
-                          value={slot.title}
-                          onChange={(e) => {
-                            setRouting({
-                              ...state.routing,
-                              source: updateSlot(state.routing.source, idx, { title: e.target.value }),
-                            })
-                          }}
-                          className="h-10 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
-                          placeholder="例如：Camera A"
-                        />
-                      </label>
-                      <label className="grid gap-1">
-                        <div className="text-xs text-neutral-300">來源</div>
-                        <select
-                          value={encodeSource(slot.source)}
-                          onChange={(e) => {
-                            const raw = e.target.value
-                            const decoded = decodeSource(raw)
-                            const nextSource = decoded
-                            const defaultTitle = `來源 ${idx + 1}`
-                            const currentTitle = (slot.title ?? '').trim()
-                            const prevAutoTitle = (() => {
-                              if (slot.source.type === 'participantName') return slot.source.name.trim()
-                              return ''
-                            })()
-                            const shouldAutoRename =
-                              !currentTitle || currentTitle === defaultTitle || (prevAutoTitle && currentTitle === prevAutoTitle)
-                            const nextTitle =
-                              shouldAutoRename
-                                ? nextSource.type === 'participantName'
-                                  ? nextSource.name
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="rounded-xl border border-neutral-800 bg-neutral-900/30 p-3">
+                  <div className="mb-2 text-sm font-semibold">MTV 組</div>
+                  <div className="grid gap-3">
+                    {state.routing.mtv.map((slot, idx) => (
+                      <div key={idx} className="grid gap-2 rounded-xl border border-neutral-800 bg-neutral-950/20 p-3">
+                        <div className="text-xs text-neutral-400">MTV {idx + 1}</div>
+                        <label className="grid gap-1">
+                          <div className="text-xs text-neutral-300">名稱</div>
+                          <input
+                            value={slot.title}
+                            onChange={(e) => {
+                              setRouting({
+                                ...state.routing,
+                                mtv: updateSlot(state.routing.mtv, idx, { title: e.target.value }),
+                              })
+                            }}
+                            className="h-10 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
+                            placeholder="例如：MTV 組"
+                          />
+                        </label>
+                        <label className="grid gap-1">
+                          <div className="text-xs text-neutral-300">來源</div>
+                          <select
+                            value={encodeSource(slot.source)}
+                            onChange={(e) => {
+                              const raw = e.target.value
+                              const nextSource = decodeSource(raw)
+                              setRouting({
+                                ...state.routing,
+                                mtv: updateSlot(state.routing.mtv, idx, { source: nextSource }),
+                              })
+                            }}
+                            className="h-10 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
+                          >
+                            <option value="none">（未指派）</option>
+                            <optgroup label="會議室來源（採集端加入）">
+                              {sourceCandidates.map((p) => {
+                                const n = (p.displayName ?? '').trim()
+                                const dup = (candidateNameCounts.get(n) ?? 0) > 1
+                                return (
+                                  <option key={p.participantId} value={`name:${encodeURIComponent(n)}`}>
+                                    {dup ? `${n}（重複）` : n} · {p.participantId.slice(0, 8)}
+                                  </option>
+                                )
+                              })}
+                            </optgroup>
+                          </select>
+                        </label>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-neutral-800 bg-neutral-950/30 p-3">
+                  <div className="mb-2 text-sm font-semibold">Source 組（8 格）</div>
+                  <div className="grid gap-3">
+                    {state.routing.source.map((slot, idx) => (
+                      <div key={idx} className="grid gap-2 rounded-xl border border-neutral-800 bg-neutral-950/20 p-3">
+                        <div className="text-xs text-neutral-400">格 {idx + 1}</div>
+                        <label className="grid gap-1">
+                          <div className="text-xs text-neutral-300">名稱</div>
+                          <input
+                            value={slot.title}
+                            onChange={(e) => {
+                              setRouting({
+                                ...state.routing,
+                                source: updateSlot(state.routing.source, idx, { title: e.target.value }),
+                              })
+                            }}
+                            className="h-10 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
+                            placeholder="例如：Camera A"
+                          />
+                        </label>
+                        <label className="grid gap-1">
+                          <div className="text-xs text-neutral-300">來源</div>
+                          <select
+                            value={encodeSource(slot.source)}
+                            onChange={(e) => {
+                              const raw = e.target.value
+                              const decoded = decodeSource(raw)
+                              const nextSource = decoded
+                              const defaultTitle = `來源 ${idx + 1}`
+                              const currentTitle = (slot.title ?? '').trim()
+                              const prevAutoTitle = (() => {
+                                if (slot.source.type === 'participantName') return slot.source.name.trim()
+                                return ''
+                              })()
+                              const shouldAutoRename =
+                                !currentTitle || currentTitle === defaultTitle || (prevAutoTitle && currentTitle === prevAutoTitle)
+                              const nextTitle =
+                                shouldAutoRename
+                                  ? nextSource.type === 'participantName'
+                                    ? nextSource.name
+                                    : slot.title
                                   : slot.title
-                                : slot.title
-                            setRouting({
-                              ...state.routing,
-                              source: updateSlot(state.routing.source, idx, { source: nextSource, title: nextTitle }),
-                            })
-                          }}
-                          className="h-10 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
-                        >
-                          <option value="none">（未指派）</option>
-                          <optgroup label="會議室來源（採集端加入）">
-                            {sourceCandidates.map((p) => {
-                              const n = (p.displayName ?? '').trim()
-                              const dup = (candidateNameCounts.get(n) ?? 0) > 1
-                              return (
-                                <option key={p.participantId} value={`name:${encodeURIComponent(n)}`}>
-                                  {dup ? `${n}（重複）` : n} · {p.participantId.slice(0, 8)}
-                                </option>
-                              )
-                            })}
-                          </optgroup>
-                        </select>
-                      </label>
-                    </div>
-                  ))}
+                              setRouting({
+                                ...state.routing,
+                                source: updateSlot(state.routing.source, idx, { source: nextSource, title: nextTitle }),
+                              })
+                            }}
+                            className="h-10 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
+                          >
+                            <option value="none">（未指派）</option>
+                            <optgroup label="會議室來源（採集端加入）">
+                              {sourceCandidates.map((p) => {
+                                const n = (p.displayName ?? '').trim()
+                                const dup = (candidateNameCounts.get(n) ?? 0) > 1
+                                return (
+                                  <option key={p.participantId} value={`name:${encodeURIComponent(n)}`}>
+                                    {dup ? `${n}（重複）` : n} · {p.participantId.slice(0, 8)}
+                                  </option>
+                                )
+                              })}
+                            </optgroup>
+                          </select>
+                        </label>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               </div>
             </div>
+          )}
 
-            <div className="mt-4 rounded-xl border border-neutral-800 bg-neutral-950/30 p-3">
+          {/* Tab: Marquee */}
+          {activeTab === 'marquee' && (
+            <div className="rounded-xl border border-neutral-800 bg-neutral-900/30 p-4 animate-in fade-in duration-200">
               <div className="mb-2 text-sm font-semibold">跑馬燈控制</div>
+              <div className="text-xs text-neutral-400 mb-3">設定所有監看端同步顯示的跑馬燈文字。</div>
               <div className="flex flex-col gap-2 md:flex-row">
                 <input
                   value={marqueeText}
@@ -696,22 +743,95 @@ export function Admin() {
                 </button>
               </div>
             </div>
-          </div>
+          )}
 
-          <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4">
-            <div className="mb-2 text-sm font-semibold">人員狀態（配額與連線）</div>
-            <div className="text-xs text-neutral-400 mb-3">
-              顯示目前系統 25 個固定名額的使用狀況，以及實際連線到會議室的人員。
+          {/* Tab: Personnel */}
+          {activeTab === 'personnel' && (
+            <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4 animate-in fade-in duration-200">
+              <div className="mb-2 text-sm font-semibold">人員狀態（配額與連線）</div>
+              <div className="text-xs text-neutral-400 mb-3">
+                顯示目前系統 25 個固定名額的使用狀況，以及實際連線到會議室的人員。
+              </div>
+              <PersonnelStatusPanel
+                opsId={opsRoom}
+                allocations={allocations}
+                now={now}
+                error={dbError}
+              />
             </div>
-            <PersonnelStatusPanel
-              opsId={opsRoom}
-              allocations={allocations}
-              now={now}
-              error={dbError}
-            />
-          </div>
+          )}
 
-        </div >
+          {/* Tab: Time Control */}
+          {activeTab === 'time' && (
+            <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4 animate-in fade-in duration-200">
+              <div className="mb-2 text-sm font-semibold">時間控制</div>
+              <div className="text-xs text-neutral-400 mb-4">
+                設定 Viewer 監看端顯示的時間。可切換為自動（網路時間）或自訂（指定的跳轉時間）。
+                當前模式：<span className={timeControl.mode === 'auto' ? 'text-emerald-400' : 'text-amber-400'}>
+                  {timeControl.mode === 'auto' ? '自動 (網路標準)' : '自訂 (手動控制)'}
+                </span>
+              </div>
+
+              <div className="grid gap-4 md:grid-cols-2">
+                {/* Auto Mode */}
+                <div className={`rounded-xl border p-4 transition-colors ${timeControl.mode === 'auto' ? 'border-emerald-500/50 bg-emerald-950/20' : 'border-neutral-800 bg-neutral-950/30'}`}>
+                  <div className="mb-2 font-semibold text-emerald-100">自動設定時間</div>
+                  <div className="mb-4 text-xs text-neutral-400">
+                    讓 Viewer 監看端自動顯示當地網路標準時間。
+                  </div>
+                  <button
+                    onClick={() => applyTimeControl('auto')}
+                    className="w-full rounded-lg bg-emerald-600 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+                  >
+                    回復標準時間
+                  </button>
+                </div>
+
+                {/* Manual Mode */}
+                <div className={`rounded-xl border p-4 transition-colors ${timeControl.mode === 'manual' ? 'border-amber-500/50 bg-amber-950/20' : 'border-neutral-800 bg-neutral-950/30'}`}>
+                  <div className="mb-2 font-semibold text-amber-100">自訂時間</div>
+                  <div className="mb-4 text-xs text-neutral-400">
+                    設定起始時間並開始讀秒（秒數會自動遞增）。
+                  </div>
+                  <div className="mb-4 flex items-center justify-center gap-2">
+                    <input
+                      type="number"
+                      min={0}
+                      max={23}
+                      value={String(manualInput.h).padStart(2, '0')}
+                      onChange={(e) => setManualInput({ ...manualInput, h: Math.min(23, Math.max(0, Number(e.target.value))) })}
+                      className="h-12 w-16 rounded-lg border border-neutral-700 bg-neutral-900 text-center text-xl font-mono text-white outline-none focus:border-neutral-500"
+                    />
+                    <span className="text-neutral-500">:</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={59}
+                      value={String(manualInput.m).padStart(2, '0')}
+                      onChange={(e) => setManualInput({ ...manualInput, m: Math.min(59, Math.max(0, Number(e.target.value))) })}
+                      className="h-12 w-16 rounded-lg border border-neutral-700 bg-neutral-900 text-center text-xl font-mono text-white outline-none focus:border-neutral-500"
+                    />
+                    <span className="text-neutral-500">:</span>
+                    <input
+                      type="number"
+                      min={0}
+                      max={59}
+                      value={String(manualInput.s).padStart(2, '0')}
+                      onChange={(e) => setManualInput({ ...manualInput, s: Math.min(59, Math.max(0, Number(e.target.value))) })}
+                      className="h-12 w-16 rounded-lg border border-neutral-700 bg-neutral-900 text-center text-xl font-mono text-white outline-none focus:border-neutral-500"
+                    />
+                  </div>
+                  <button
+                    onClick={() => applyTimeControl('manual')}
+                    className="w-full rounded-lg bg-amber-600 py-2 text-sm font-semibold text-white hover:bg-amber-500"
+                  >
+                    開始 (設定並自動讀秒)
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
       </div >
 
       {/* Legacy Code for Native Modal */}

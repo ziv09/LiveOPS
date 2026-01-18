@@ -1,4 +1,4 @@
-import dayjs from 'dayjs'
+
 import { useEffect, useMemo, useRef, useState } from 'react'
 import Split from 'react-split'
 import { useNavigate, useSearchParams } from 'react-router-dom'
@@ -10,6 +10,8 @@ import { normalizeOpsId } from '../utils/ops'
 import { ensureRoleName } from '../utils/roleName'
 import { buildJaasSdkRoomName } from '../jaas/jaasConfig'
 import { useJaasGatekeeper } from '../jaas/useJaasGatekeeper'
+import { getFirebaseDatabase } from '../signal/firebase'
+import { onValue, ref } from 'firebase/database'
 
 function makeGutter(direction: 'horizontal' | 'vertical') {
   const gutter = document.createElement('div')
@@ -129,7 +131,65 @@ export function ViewerMeet() {
   const opsRoom = useMemo(() => normalizeOpsId(state.session.room || opsId), [opsId, state.session.room])
   const room = useMemo(() => buildJaasSdkRoomName(opsRoom), [opsRoom])
 
-  const [now, setNow] = useState(() => dayjs().format('HH:mm:ss'))
+  // --- Time Control (Viewer) ---
+  const [timeControl, setTimeControl] = useState<{ mode: 'auto' | 'manual'; base?: number; display?: number }>({ mode: 'auto' })
+  const [nowDate, setNowDate] = useState('')
+  const [nowTime, setNowTime] = useState('')
+
+  useEffect(() => {
+    // Weekday map
+    const days = ['日', '一', '二', '三', '四', '五', '六']
+
+    const renderTime = () => {
+      const d = new Date()
+      // Date: Always today's real date
+      const yyyy = d.getFullYear()
+      const MM = String(d.getMonth() + 1).padStart(2, '0')
+      const DD = String(d.getDate()).padStart(2, '0')
+      const day = days[d.getDay()]
+      setNowDate(`${yyyy}/${MM}/${DD} (週${day})`)
+
+      // Time: Auto or Manual
+      let h, m, s
+      if (timeControl.mode === 'manual' && timeControl.base && typeof timeControl.display === 'number') {
+        const elapsedSeconds = (Date.now() - timeControl.base) / 1000
+        let totalSeconds = timeControl.display + elapsedSeconds
+
+        // normalize to one day (0-86400)
+        totalSeconds = totalSeconds % 86400
+        if (totalSeconds < 0) totalSeconds += 86400
+
+        h = Math.floor(totalSeconds / 3600)
+        m = Math.floor((totalSeconds % 3600) / 60)
+        s = Math.floor(totalSeconds % 60)
+      } else {
+        h = d.getHours()
+        m = d.getMinutes()
+        s = d.getSeconds()
+      }
+
+      setNowTime(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`)
+    }
+
+    const t = window.setInterval(renderTime, 200)
+    renderTime() // init
+    return () => window.clearInterval(t)
+  }, [timeControl])
+
+  useEffect(() => {
+    const db = getFirebaseDatabase()
+    if (!db || !opsId) return
+    // Listen to timeControl changes
+    const refPath = `liveops/v2/jaas/rooms/${opsId}/state/timeControl`
+    const unsub = onValue(ref(db, refPath), (snap) => {
+      const val = snap.val()
+      if (val) setTimeControl(val)
+      else setTimeControl({ mode: 'auto' })
+    })
+    return () => unsub()
+  }, [opsId])
+  // --- End Time Control ---
+
   const [listenEnabled, setListenEnabled] = useState(true)
   const [audioPanelOpen, setAudioPanelOpen] = useState(false)
 
@@ -137,11 +197,6 @@ export function ViewerMeet() {
   const pageSize = 8
   const [sourcePage, setSourcePage] = useState(0)
   const [fullscreenKey, setFullscreenKey] = useState<string | null>(null)
-
-  useEffect(() => {
-    const t = window.setInterval(() => setNow(dayjs().format('HH:mm:ss')), 500)
-    return () => window.clearInterval(t)
-  }, [])
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -241,8 +296,7 @@ export function ViewerMeet() {
 
   const allRemoteAudios = useMemo(() => confState.remotes.map((r) => ({ id: r.id, track: r.audioTrack })), [confState.remotes])
 
-  // --- GUARDS (Conditional Returns) ---
-  // Must be placed AFTER all hooks to follow React Rules of Hooks
+  // --- GUARDS ---
 
   if (!authed) {
     return (
@@ -325,8 +379,6 @@ export function ViewerMeet() {
     )
   }
 
-  // --- Main Render ---
-
   return (
     <div className="relative h-full w-full bg-neutral-950 text-neutral-100">
       {/* Connection status */}
@@ -402,9 +454,23 @@ export function ViewerMeet() {
       >
         {/* Left: time + MTV + marquee */}
         <div className="flex h-full w-full flex-col gap-3 p-3">
-          <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-3 text-center">
-            <div className="text-xs text-neutral-400">時間區</div>
-            <div className="mt-1 font-mono text-2xl font-semibold">{now}</div>
+          <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4 text-center">
+            {/* Time Display Area */}
+            <div className="flex flex-col items-center justify-center select-none">
+              <div className="text-xl md:text-2xl font-semibold text-neutral-300 mb-2">
+                {nowDate}
+              </div>
+              <div className="font-mono font-bold leading-none tracking-tight"
+                style={{
+                  fontSize: 'clamp(3rem, 12vw, 180pt)', // Responsive but target 180pt on big screens
+                  lineHeight: '1',
+                  color: '#ef4444', // Red-500
+                  WebkitTextStroke: '3px white', // White stroke
+                  textShadow: '0 4px 10px rgba(0,0,0,0.5)'
+                }}>
+                {nowTime}
+              </div>
+            </div>
           </div>
 
           <div className="relative flex-1 overflow-hidden rounded-2xl border border-neutral-800 bg-neutral-900/30">
