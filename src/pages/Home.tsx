@@ -127,7 +127,7 @@ export function Home() {
                 }
                 setAuthed('viewer')
                 const baseName = (viewerName || (role === 'crew' ? '來賓' : '一般')).trim() || (role === 'crew' ? '來賓' : '一般')
-                const rolePrefix = role === 'crew' ? 'crew.' : 'mon.'
+                const rolePrefix = role === 'crew' ? 'crew_' : 'mon.'
                 const displayName = ensureRoleName(rolePrefix, baseName, role === 'crew' ? '來賓' : '一般')
                 go('/viewer', {
                   ops: trimmedOps,

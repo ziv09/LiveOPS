@@ -1,0 +1,30 @@
+{
+    "rules": {
+        "liveops": {
+            "v1": {
+                "rooms": {
+                    "$room": {
+                        "$key": {
+                            "state": {
+                                ".read": "auth != null",
+                                ".write": "auth != null"
+                            }
+                        }
+                    }
+                }
+            },
+            "v2": {
+                "jaas": {
+                    "rooms": {
+                        "$room": {
+                            "state": {
+                                ".read": "auth != null",
+                                ".write": "false"
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

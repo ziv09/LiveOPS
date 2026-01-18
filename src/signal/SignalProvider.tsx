@@ -5,9 +5,10 @@ import {
   type RoutingTableV2,
   type SignalStateV1,
 } from './types'
-import { getFirebaseDatabase, isFirebaseEnabled } from './firebase'
+import { getFirebaseDatabase, getFirebaseAuth, isFirebaseEnabled } from './firebase'
 import { off, onValue, ref, set } from 'firebase/database'
 import { isAuthed } from '../auth/auth'
+import { onAuthStateChanged, signInAnonymously, type User } from 'firebase/auth'
 
 const STORAGE_KEY_PREFIX = 'liveops.signal.v1:'
 const CHANNEL_PREFIX = 'liveops-signal:'
@@ -168,49 +169,82 @@ export function SignalProvider(props: { room: string; children: React.ReactNode 
   useEffect(() => {
     if (!firebaseDb) return
 
-    const dbRef = ref(firebaseDb, firebasePath)
-    const unsub = onValue(
-      dbRef,
-      (snap) => {
-        setFirebaseReady(true)
-        setSyncError(null)
-        const val = snap.val()
-        if (!val) {
-          // Seed initial state for this room if empty.
-          if (isAdminClient) {
-            try {
-              set(dbRef, { ...state, _adminProof: adminKey })
-            } catch {
-              // noop
+    const auth = getFirebaseAuth()
+    if (!auth) {
+      setSyncError('Firebase Auth 初始化失敗')
+      return
+    }
+
+    let dbUnsub: (() => void) | undefined
+    let cancelled = false
+
+    const setupListener = (_user: User) => {
+      if (dbUnsub || cancelled) return
+
+      const dbRef = ref(firebaseDb, firebasePath)
+      dbUnsub = onValue(
+        dbRef,
+        (snap) => {
+          if (cancelled) return
+          setFirebaseReady(true)
+          setSyncError(null)
+          const val = snap.val()
+          if (!val) {
+            // Seed initial state for this room if empty.
+            if (isAdminClient) {
+              try {
+                set(dbRef, { ...state, _adminProof: adminKey })
+              } catch {
+                // noop
+              }
             }
+            return
           }
-          return
-        }
-        const incoming = normalizeSignalState(props.room, val)
-        if (incoming?.session?.opsId !== props.room) return
-        setState((prev) => {
-          if ((incoming.updatedAt ?? 0) <= (prev.updatedAt ?? 0)) return prev
-          writeStoredState(storageKey, incoming)
-          return incoming
+          const incoming = normalizeSignalState(props.room, val)
+          if (incoming?.session?.opsId !== props.room) return
+          setState((prev) => {
+            if ((incoming.updatedAt ?? 0) <= (prev.updatedAt ?? 0)) return prev
+            writeStoredState(storageKey, incoming)
+            return incoming
+          })
+        },
+        (err) => {
+          if (cancelled) return
+          setFirebaseReady(false)
+          // Don't show permission denied errors if we are just transitioning auth states
+          if ((err as any)?.code === 'PERMISSION_DENIED') {
+            // Just warn, maybe we lost auth temporarily
+            console.warn('[SignalProvider] Permission denied (waiting for auth?)')
+          } else {
+            setSyncError(`Firebase 同步失敗：${String((err as any)?.message ?? err ?? '')}`)
+          }
+        },
+      )
+    }
+
+    const authUnsub = onAuthStateChanged(auth, (user) => {
+      if (user) {
+        setupListener(user)
+      } else {
+        // No user? Try to sign in anonymously automatically
+        signInAnonymously(auth).catch((e: any) => {
+          console.error('[SignalProvider] Auto-sign-in failed', e)
+          setSyncError('無法建立匿名連線')
         })
-      },
-      (err) => {
-        setFirebaseReady(false)
-        setSyncError(`Firebase 同步失敗：${String((err as any)?.message ?? err ?? '')}`)
-      },
-    )
+      }
+    })
 
     return () => {
-      try {
-        unsub()
-      } catch {
-        // noop
+      cancelled = true
+      authUnsub()
+      if (dbUnsub) {
+        try {
+          dbUnsub()
+        } catch { }
       }
       try {
-        off(dbRef)
-      } catch {
-        // noop
-      }
+        off(ref(firebaseDb, firebasePath))
+      } catch { }
     }
   }, [adminKey, firebaseDb, firebasePath, isAdminClient, props.room, state, storageKey])
 

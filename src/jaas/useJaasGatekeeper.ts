@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { signInAnonymously } from 'firebase/auth'
 import { httpsCallable } from 'firebase/functions'
-import { getFirebaseAuth, getFirebaseFunctions, isFirebaseEnabled } from '../signal/firebase'
+import { getFirebaseAuth, getFirebaseDatabase, getFirebaseFunctions, isFirebaseEnabled } from '../signal/firebase'
+import { onValue, ref } from 'firebase/database'
 import { normalizeOpsId } from '../utils/ops'
 
 type GateStatus = 'idle' | 'auth' | 'issuing' | 'ready' | 'error'
@@ -69,8 +70,9 @@ export function useJaasGatekeeper(params: {
     }
 
     const auth = getFirebaseAuth()
+    const db = getFirebaseDatabase()
     const functions = getFirebaseFunctions()
-    if (!auth || !functions) {
+    if (!auth || !db || !functions) {
       setRes((r) => ({ ...r, status: 'error', error: 'Firebase 初始化失敗。' }))
       return
     }
@@ -79,6 +81,9 @@ export function useJaasGatekeeper(params: {
     hasStartedRef.current = true
     inFlightRef.current = true
 
+    // Keep track of DB listener
+    let dbUnsub: (() => void) | undefined
+
     const run = async () => {
       setRes({ status: 'auth', error: null, token: null, slotId: null, counts: null })
 
@@ -86,10 +91,13 @@ export function useJaasGatekeeper(params: {
         if (!auth.currentUser) {
           await signInAnonymously(auth)
         }
+        const currentUserUid = auth.currentUser?.uid
 
         const scheduleRefresh = () => {
           if (refreshTimerRef.current !== null) window.clearTimeout(refreshTimerRef.current)
           refreshTimerRef.current = window.setTimeout(async () => {
+            // Cleanup old listener before refreshing
+            if (dbUnsub) { dbUnsub(); dbUnsub = undefined }
             await fetchToken()
           }, 50 * 60 * 1000)
         }
@@ -111,16 +119,33 @@ export function useJaasGatekeeper(params: {
             setRes({ status: 'ready', error: null, token, slotId: slotId || null, counts })
             scheduleRefresh()
 
+            // Heartbeat
             if (heartbeatTimerRef.current === null) {
               heartbeatTimerRef.current = window.setInterval(async () => {
                 try {
                   const hb = httpsCallable(functions, 'heartbeatJaas')
                   await hb({ ops })
-                } catch {
-                  // noop
-                }
+                } catch { }
               }, 20_000)
             }
+
+            // KICK DETECTION: Listen to my slot
+            if (slotId && currentUserUid) {
+              if (dbUnsub) dbUnsub() // Clear previous if any
+              const slotRef = ref(db, `liveops/v2/jaas/rooms/${ops}/state/allocations/${slotId}`)
+              dbUnsub = onValue(slotRef, (snap) => {
+                const val = snap.val()
+                // If slot is gone, OR occupied by someone else (shouldn't happen if slotId unique, but check UID)
+                if (!val || val.uid !== currentUserUid) {
+                  console.warn('[JaasGatekeeper] Slot lost (kick or expire).')
+                  setRes({ status: 'error', error: '您已被移出會議室（釋放或逾時）。', token: null, slotId: null, counts: null })
+                  if (dbUnsub) { dbUnsub(); dbUnsub = undefined }
+                  if (heartbeatTimerRef.current) window.clearInterval(heartbeatTimerRef.current)
+                  if (refreshTimerRef.current) window.clearTimeout(refreshTimerRef.current)
+                }
+              })
+            }
+
           } catch (e: any) {
             const msg = String(e?.message ?? e ?? 'Token 取得失敗')
             setRes((prev) => {
@@ -144,6 +169,11 @@ export function useJaasGatekeeper(params: {
     }
 
     void run()
+
+    // Cleanup function for this effect
+    return () => {
+      if (dbUnsub) dbUnsub()
+    }
   }, [displayName, ops, params.enabled, params.requestedRole])
 
   return res

@@ -1,18 +1,16 @@
 import { useEffect, useMemo, useState } from 'react'
 import { useNavigate, useSearchParams } from 'react-router-dom'
 import { QRCodeCanvas } from 'qrcode.react'
+import { onAuthStateChanged } from 'firebase/auth'
 import { clearAuth, isAuthed } from '../auth/auth'
-import { getFirebaseDatabase, getFirebaseFunctions } from '../signal/firebase'
+import { getFirebaseAuth, getFirebaseDatabase, getFirebaseFunctions } from '../signal/firebase'
 import { onValue, ref } from 'firebase/database'
 import { httpsCallable } from 'firebase/functions'
-import { useLibJitsiConference } from '../jitsi/useLibJitsiConference'
 import { useSignal } from '../signal/useSignal'
 import type { RoutingSlotV1, RoutingSourceV1 } from '../signal/types'
 import { normalizeOpsId } from '../utils/ops'
 import { createCollectorToken } from '../utils/token'
-import { getRolePrefixFromDisplayName } from '../utils/roleName'
 import { buildJaasSdkRoomName, getJaasAppId, getJaasDomain } from '../jaas/jaasConfig'
-import { useJaasGatekeeper } from '../jaas/useJaasGatekeeper'
 
 function getNextOpsId() {
   const key = 'liveops.ops.counter'
@@ -39,11 +37,15 @@ function updateSlot(slots: RoutingSlotV1[], index: number, patch: Partial<Routin
   return next
 }
 
-function TokenStatusPanel(props: { opsId: string }) {
-  // eslint-disable-next-line @typescript-eslint/no-unused-vars
-  const [allocations, setAllocations] = useState<any[]>([])
-  const [counts, setCounts] = useState({ total: 0, collector: 0, monitor: 0, crew: 0 })
-  const [loading, setLoading] = useState(true)
+const ALL_SLOTS = [
+  ...Array.from({ length: 16 }, (_, i) => ({ id: `collector_${String(i + 1).padStart(2, '0')}`, role: 'collector' })),
+  ...Array.from({ length: 4 }, (_, i) => ({ id: `monitor_${String(i + 1).padStart(2, '0')}`, role: 'monitor' })),
+  ...Array.from({ length: 5 }, (_, i) => ({ id: `crew_${String(i + 1).padStart(2, '0')}`, role: 'crew' })),
+]
+
+function PersonnelStatusPanel(props: { opsId: string; allocations: Record<string, any>; now: number; error: string | null }) {
+  const [isOpen, setIsOpen] = useState(false)
+
   const functions = useMemo(() => {
     try {
       return getFirebaseFunctions()
@@ -51,41 +53,6 @@ function TokenStatusPanel(props: { opsId: string }) {
       return null
     }
   }, [])
-
-  useEffect(() => {
-    const db = getFirebaseDatabase()
-    if (!db || !props.opsId) return
-
-    const roomRef = ref(db, `liveops/v2/jaas/rooms/${props.opsId}/state`)
-    const unsub = onValue(roomRef, (snap) => {
-      setLoading(false)
-      const val = snap.val()
-      const allocs = val?.allocations ?? {}
-      const list = Object.values(allocs).map((a: any) => ({
-        ...a,
-        lastSeenDate: a.lastSeen ? new Date(a.lastSeen).toLocaleTimeString() : 'N/A',
-        isStale: Date.now() - (Number(a.lastSeen) || 0) > 60_000,
-      }))
-      // Sort: Stale first, then by role, then by name
-      list.sort((a, b) => {
-        if (a.isStale !== b.isStale) return a.isStale ? -1 : 1
-        if (a.role !== b.role) return a.role.localeCompare(b.role)
-        return String(a.displayName ?? '').localeCompare(String(b.displayName ?? ''))
-      })
-      setAllocations(list)
-
-      const c = { total: 0, collector: 0, monitor: 0, crew: 0 }
-      for (const a of list) {
-        c.total++
-        if (a.role === 'collector') c.collector++
-        if (a.role === 'monitor') c.monitor++
-        if (a.role === 'crew') c.crew++
-      }
-      setCounts(c)
-    })
-
-    return () => unsub()
-  }, [props.opsId])
 
   const handleKick = async (slotId: string) => {
     if (!functions) return
@@ -98,64 +65,121 @@ function TokenStatusPanel(props: { opsId: string }) {
     }
   }
 
-  if (loading) return <div className="p-4 text-sm text-neutral-400">正在載入 Token 狀態...</div>
+  // Merge Data
+  const rows = useMemo(() => {
+    return ALL_SLOTS.map((slot) => {
+      const alloc = props.allocations[slot.id]
+
+      let status = 'empty'
+      let lastSeenTime = 0
+
+      if (alloc) {
+        lastSeenTime = Number(alloc.lastSeen || 0)
+        // 40s tolerance for heartbeat
+        if (props.now - lastSeenTime < 40000) status = 'online'
+        else status = 'offline'
+      }
+
+      return {
+        ...slot,
+        alloc,
+        status, // 'online' | 'offline' | 'empty'
+        displayName: alloc?.displayName || '-',
+        lastSeen: lastSeenTime ? new Date(lastSeenTime).toLocaleTimeString() : null,
+      }
+    })
+  }, [props.allocations, props.now])
+
+  const stats = useMemo(() => {
+    return {
+      total: Object.keys(props.allocations).length,
+      online: rows.filter(r => r.status === 'online').length,
+    }
+  }, [props.allocations, rows])
 
   return (
-    <div className="grid gap-4">
-      <div className="flex flex-wrap items-center gap-4 text-sm">
-        <div className="font-semibold text-neutral-200">
-          總用量：
-          <span className={counts.total >= 25 ? 'text-rose-400' : 'text-emerald-400'}>{counts.total}</span> / 25
+    <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 overflow-hidden">
+      <button
+        className="w-full flex items-center justify-between p-4 hover:bg-neutral-800/30 transition-colors"
+        onClick={() => setIsOpen(!isOpen)}
+      >
+        <div className="flex flex-col items-start gap-1">
+          <div className="text-sm font-semibold text-neutral-200">
+            人員狀態（配額與連線）
+            {props.error && <span className="ml-2 text-rose-400 text-xs">⚠️ {props.error}</span>}
+          </div>
+          <div className="text-xs text-neutral-400">
+            配額：<span className={stats.total >= 25 ? 'text-rose-400' : 'text-emerald-400'}>{stats.total}</span> / 25
+            <span className="mx-2">·</span>
+            線上：<span className="text-emerald-400">{stats.online}</span> 人
+          </div>
         </div>
-        <div className="text-neutral-400">
-          SRC: {counts.collector}/16 · MON: {counts.monitor}/4 · CREW: {counts.crew}/5
+        <div className="text-neutral-500 transform transition-transform duration-200" style={{ transform: isOpen ? 'rotate(180deg)' : 'rotate(0deg)' }}>
+          ▼
         </div>
-      </div>
+      </button>
 
-      <div className="max-h-60 overflow-y-auto rounded-xl border border-neutral-800 bg-neutral-950/40">
-        <table className="w-full text-left text-xs">
-          <thead className="sticky top-0 bg-neutral-900 text-neutral-400">
-            <tr>
-              <th className="px-3 py-2 font-medium">Slot ID (Role)</th>
-              <th className="px-3 py-2 font-medium">Display Name</th>
-              <th className="px-3 py-2 font-medium">Last Seen</th>
-              <th className="px-3 py-2 font-medium">Action</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-neutral-800 text-neutral-300">
-            {allocations.map((a) => (
-              <tr key={a.slotId} className={a.isStale ? 'bg-rose-950/10' : ''}>
-                <td className="px-3 py-2 font-mono">
-                  {a.slotId}
-                  <span className="ml-1 text-neutral-500">({a.role})</span>
-                </td>
-                <td className="px-3 py-2">{a.displayName}</td>
-                <td className="px-3 py-2">
-                  <div className={a.isStale ? 'text-rose-400' : 'text-emerald-400'}>
-                    {a.lastSeenDate}
-                  </div>
-                  {a.isStale && <div className="text-[10px] text-rose-500">可能已離線 (Ghost)</div>}
-                </td>
-                <td className="px-3 py-2">
-                  <button
-                    className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-[10px] hover:bg-neutral-700 hover:text-white"
-                    onClick={() => handleKick(a.slotId)}
-                  >
-                    釋放
-                  </button>
-                </td>
-              </tr>
-            ))}
-            {allocations.length === 0 && (
-              <tr>
-                <td colSpan={4} className="px-3 py-4 text-center text-neutral-500">
-                  目前無人佔用 Token
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
+      {isOpen && (
+        <div className="border-t border-neutral-800 bg-neutral-950/40">
+          <div className="max-h-96 overflow-y-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="sticky top-0 bg-neutral-900 text-neutral-400 z-10">
+                <tr>
+                  <th className="px-3 py-2 font-medium">ID</th>
+                  <th className="px-3 py-2 font-medium">身份</th>
+                  <th className="px-3 py-2 font-medium">使用者（系統偵測/配額）</th>
+                  <th className="px-3 py-2 font-medium text-right">操作</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-neutral-800 text-neutral-300">
+                {rows.map((row) => (
+                  <tr key={row.id} className={row.status === 'online' ? 'bg-emerald-950/10' : ''}>
+                    <td className="px-3 py-2 font-mono text-neutral-500">{row.id}</td>
+                    <td className="px-3 py-2">
+                      <span className={`px-1.5 py-0.5 rounded text-[10px] uppercase font-semibold
+                        ${row.role === 'collector' ? 'bg-blue-950/40 text-blue-300' :
+                          row.role === 'monitor' ? 'bg-purple-950/40 text-purple-300' :
+                            'bg-orange-950/40 text-orange-300'}`}>
+                        {row.role}
+                      </span>
+                    </td>
+                    <td className="px-3 py-2">
+                      <div className="flex items-center gap-2">
+                        {row.status === 'online' && <span className="text-emerald-400 text-[10px]">●</span>}
+                        {row.status === 'offline' && <span className="text-amber-400 text-[10px]">●</span>}
+                        {row.status === 'empty' && <span className="text-neutral-700 text-[10px]">○</span>}
+
+                        <span className={row.status === 'empty' ? 'text-neutral-600' : 'text-neutral-200'}>
+                          {row.displayName}
+                        </span>
+
+                        {row.status === 'offline' && (
+                          <span className="text-[10px] text-amber-500/80">
+                            (已佔用但未連線, {row.lastSeen})
+                          </span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      {row.alloc && (
+                        <button
+                          className="rounded border border-neutral-700 bg-neutral-800 px-2 py-1 text-[10px] hover:bg-neutral-700 hover:text-white"
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            handleKick(row.id)
+                          }}
+                        >
+                          釋放
+                        </button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
@@ -170,39 +194,108 @@ export function Admin() {
 
   const [opsDraft, setOpsDraft] = useState(() => getNextOpsId().next)
   const [marqueeText, setMarqueeText] = useState(state.marquee.text)
-  const [shareBaseUrl, setShareBaseUrl] = useState(() => window.location.origin)
+  const shareBaseUrl = window.location.origin
   useEffect(() => setMarqueeText(state.marquee.text), [state.marquee.text])
 
-  // LiveOPS 目前只支援 8x8 JaaS（8x8.vc + JWT）。
+  // --- DB Allocations (Zero-MAU Presence) ---
+  const [allocations, setAllocations] = useState<Record<string, any>>({})
+  const [now, setNow] = useState(Date.now())
+  const [dbError, setDbError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const t = window.setInterval(() => setNow(Date.now()), 2000)
+    return () => window.clearInterval(t)
+  }, [])
+
+  useEffect(() => {
+    const auth = getFirebaseAuth()
+    const db = getFirebaseDatabase()
+    if (!auth || !db || !opsId || !authed) return
+
+    let dbUnsub: (() => void) | undefined
+
+    const setupListener = () => {
+      if (dbUnsub) return
+      setDbError(null)
+      const roomRef = ref(db, `liveops/v2/jaas/rooms/${opsId}/state`)
+      dbUnsub = onValue(roomRef, (snap) => {
+        const val = snap.val()
+        setAllocations(val?.allocations ?? {})
+        setDbError(null)
+      }, (err) => {
+        console.error('[Admin] Allocations permission/network error:', err)
+        setDbError(err.message)
+      })
+    }
+
+    if (auth.currentUser) setupListener()
+    const authUnsub = onAuthStateChanged(auth, (user) => {
+      if (user) setupListener()
+    })
+
+    return () => {
+      authUnsub()
+      if (dbUnsub) dbUnsub()
+    }
+  }, [opsId, authed])
+
+  // --- Native Room Modal Logic ---
+  const [nativeModalOpen, setNativeModalOpen] = useState(false)
+  const [nativeLoading, setNativeLoading] = useState(false)
+  const [nativeError, setNativeError] = useState<string | null>(null)
+  const [nativeUrl, setNativeUrl] = useState<string | null>(null)
 
   const meetingCode = opsId || normalizeOpsId(state.session.opsId)
   const opsRoom = useMemo(() => normalizeOpsId(state.session.room || meetingCode), [meetingCode, state.session.room])
   const room = useMemo(() => buildJaasSdkRoomName(opsRoom), [opsRoom])
 
-  const adminDisplayName = 'mon.Admin'
-  const gate = useJaasGatekeeper({
-    opsId: opsRoom,
-    displayName: adminDisplayName,
-    requestedRole: 'admin',
-    enabled: !!opsId && authed,
-  })
+  const startNativeRoomFlow = async () => {
+    if (!opsId) {
+      window.alert('錯誤：找不到會議碼')
+      return
+    }
 
-  const openJitsiAuthPopup = () => {
-    const domain = getJaasDomain()
-    const appId = getJaasAppId()
-    const base = appId ? `https://${domain}/${appId}/${encodeURIComponent(opsRoom || 'ops01')}` : `https://${domain}`
-    const url = gate.token ? `${base}?jwt=${encodeURIComponent(gate.token)}` : base
-    window.open(url, '_blank', 'noopener,noreferrer')
+    // 1. Open Modal
+    setNativeModalOpen(true)
+    setNativeLoading(true)
+    setNativeError(null)
+    setNativeUrl(null)
+
+    // 2. Ensure Collector Token exists (background)
+    if (!state.collector.token) {
+      setCollectorToken(createCollectorToken({ opsId: meetingCode }))
+    }
+
+    try {
+      const functions = getFirebaseFunctions()
+      if (!functions) throw new Error('Firebase Functions Client Missing')
+
+      const fn = httpsCallable(functions, 'issueJaasToken')
+      console.log('[Admin] Requesting token...')
+
+      // Use 'admin' role to get moderator power
+      const out = await fn({ ops: opsId, displayName: 'mon.Admin', role: 'admin' })
+      const data: any = out.data
+      const token = String(data?.token ?? '')
+
+      if (!token) throw new Error('API returned empty token')
+
+      const domain = getJaasDomain()
+      const appId = getJaasAppId()
+      const base = appId ? `https://${domain}/${appId}/${encodeURIComponent(opsRoom || 'ops01')}` : `https://${domain}/${encodeURIComponent(room)}`
+      const fullUrl = `${base}?jwt=${encodeURIComponent(token)}`
+
+      setNativeUrl(fullUrl)
+      setNativeLoading(false)
+
+    } catch (e: any) {
+      console.error(e)
+      setNativeError(e.message || String(e))
+      setNativeLoading(false)
+    }
   }
 
-  const { state: adminConfState } = useLibJitsiConference({
-    room,
-    displayName: adminDisplayName,
-    jwt: gate.token,
-    enabled: !!opsId && authed && gate.status === 'ready',
-    mode: 'host',
-    enableLocalAudio: false,
-  })
+  // --- End Native Modal ---
 
   const collectorQrUrl = useMemo(() => {
     const token = state.collector.token
@@ -210,15 +303,23 @@ export function Admin() {
     return `${shareBaseUrl}/collector?token=${token}`
   }, [shareBaseUrl, state.collector.token])
 
+  // Filter candidates from DB allocations (role=collector, recent heartbeat)
   const sourceCandidates = useMemo(() => {
-    return adminConfState.remotes
-      .map((r) => ({ participantId: r.id, displayName: (r.name ?? '').trim() }))
-      .filter((p) => {
-        const name = p.displayName ?? ''
-        if (!name) return false
-        return getRolePrefixFromDisplayName(name) === 'src.'
+    return Object.values(allocations)
+      .filter((a: any) => {
+        // Must be collector role
+        if (a.role !== 'collector') return false
+
+        // Must be "online" (heartbeat within 40s)
+        const lastSeen = Number(a.lastSeen || 0)
+        return now - lastSeen < 40000
       })
-  }, [adminConfState.remotes])
+      .map((a: any) => ({
+        participantId: a.slotId, // Use slot ID (e.g. collector_01) as unique ID
+        displayName: (a.displayName ?? '').trim(),
+        role: a.role as string
+      }))
+  }, [allocations, now])
 
   const candidateNameCounts = useMemo(() => {
     const m = new Map<string, number>()
@@ -254,7 +355,7 @@ export function Admin() {
           <div className="mb-4 flex items-center justify-between gap-3">
             <div>
               <div className="text-xl font-semibold">控制端（Admin）</div>
-              <div className="text-sm text-neutral-300">先建立會議室（OPSxx），再進入設定畫面。</div>
+              <div className="text-sm text-neutral-300">先建立會議室（OPSxx）、再進入設定畫面。</div>
             </div>
             <button
               className="h-10 rounded-lg border border-neutral-800 bg-neutral-900/30 px-3 text-sm hover:border-neutral-600"
@@ -358,16 +459,9 @@ export function Admin() {
                 </div>
               ) : null}
               <div className="mt-2 text-[11px] text-neutral-500">
-                Admin SDK：{adminConfState.status}
-                {adminConfState.error ? <span className="text-amber-200">（{adminConfState.error}）</span> : null}
-                <span className="ml-2">
-                  Gatekeeper：{gate.status}
-                  {gate.error ? <span className="text-amber-200">（{gate.error}）</span> : null}
-                </span>
-                <span className="ml-2">
-                  Sync：{sync.mode}
-                  {sync.error ? <span className="text-amber-200">（{sync.error}）</span> : null}
-                </span>
+                Sync：{sync.mode}
+                {sync.error ? <span className="text-amber-200">（{sync.error}）</span> : null}
+                <span className="ml-2 text-emerald-400">● Zero-MAU Mode (資料庫直連)</span>
               </div>
             </div>
             <div className="flex items-center gap-2">
@@ -380,12 +474,7 @@ export function Admin() {
                 disabled={false}
                 onClick={() => {
                   if (!state.conference.started) {
-                    /* if (!canStartStreaming) {
-                      setAuthHint('尚未確認主持人就位：請先開啟原生會議室，成功進入後關閉視窗即可開始串流。')
-                      return
-                    } */
                     setConferenceStarted(true, 'Admin')
-                    if (!state.collector.token) setCollectorToken(createCollectorToken({ opsId: meetingCode }))
                     return
                   }
                   setConferenceStarted(false)
@@ -395,8 +484,8 @@ export function Admin() {
               </button>
               <button
                 className="h-10 rounded-lg border border-neutral-700 bg-neutral-900/30 px-4 text-sm font-semibold text-neutral-100 hover:border-neutral-500"
-                onClick={openJitsiAuthPopup}
-                title="開啟原生 8x8.vc 房間（除錯用）"
+                onClick={startNativeRoomFlow}
+                title="開啟原生 8x8.vc 房間"
               >
                 開啟原生會議室（8x8.vc）
               </button>
@@ -409,55 +498,8 @@ export function Admin() {
             </div>
           </div>
 
-          {/* <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-950/30 p-3">
-            <div className="flex flex-wrap items-center justify-between gap-2">
-              <div className="text-xs text-neutral-300">
-                主持人就位：
-                <span className={state.conference.hostReady ? 'ml-1 text-emerald-300' : 'ml-1 text-amber-300'}>
-                  ● {state.conference.hostReady ? '已確認' : '尚未確認'}
-                </span>
-                {authPopupOpen ? <span className="ml-2 text-neutral-400">（認證視窗開啟中…）</span> : null}
-              </div>
-              <button
-                className="h-9 rounded-lg border border-neutral-700 bg-neutral-900/30 px-3 text-xs font-semibold hover:border-neutral-500"
-                onClick={() => {
-                  setAuthHint('已手動重連 SDK。若仍未取得主持人權限，請確認你是第一個入房者，或稍後重試（伺服器可能暫時性 service-unavailable）。')
-                  setSdkEnabled(false)
-                  window.setTimeout(() => setSdkEnabled(true), 80)
-                }}
-              >
-                重連 SDK
-              </button>
-              <button
-                className="h-9 rounded-lg border border-neutral-700 bg-neutral-900/30 px-3 text-xs font-semibold hover:border-neutral-500"
-                onClick={() => setHostReady(false)}
-                title="若你要重新開房或重做主持人設定，可重置此狀態"
-              >
-                重置主持人
-              </button>
-            </div>
-            {authHint ? <div className="mt-2 text-xs text-neutral-300">{authHint}</div> : null}
-          </div> */}
-
           {state.conference.started ? (
-            <div className="mt-4 grid gap-4 md:grid-cols-2">
-              <div className="rounded-xl border border-neutral-800 bg-neutral-950/30 p-3">
-                <div className="mb-2 text-sm font-semibold">採集端加入方式</div>
-                <div className="text-xs text-neutral-400">
-                  方式 A：輸入會議碼 <span className="font-mono">{meetingCode}</span>
-                  <br />
-                  方式 B：掃描 QR Code 直接加入採集會議室
-                </div>
-                <label className="mt-3 grid gap-1">
-                  <div className="text-xs text-neutral-400">分享網址（用於 QR Code）</div>
-                  <input
-                    value={shareBaseUrl}
-                    onChange={(e) => setShareBaseUrl(e.target.value.trim())}
-                    className="h-10 rounded-lg border border-neutral-700 bg-neutral-950/40 px-3 text-sm outline-none focus:border-neutral-500"
-                    placeholder="例如：http://192.168.0.10:5173"
-                  />
-                </label>
-              </div>
+            <div className="mt-4">
               <div className="rounded-xl border border-neutral-800 bg-neutral-950/30 p-3">
                 <div className="mb-2 text-sm font-semibold">QR Code</div>
                 {collectorQrUrl ? (
@@ -506,7 +548,7 @@ export function Admin() {
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
-              <div className="rounded-xl border border-neutral-800 bg-neutral-950/30 p-3">
+              <div className="rounded-xl border border-neutral-800 bg-neutral-900/30 p-3">
                 <div className="mb-2 text-sm font-semibold">MTV 組</div>
                 <div className="grid gap-3">
                   {state.routing.mtv.map((slot, idx) => (
@@ -657,38 +699,73 @@ export function Admin() {
           </div>
 
           <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4">
-            <div className="mb-2 text-sm font-semibold">系統 Token 狀態（配額管理）</div>
+            <div className="mb-2 text-sm font-semibold">人員狀態（配額與連線）</div>
             <div className="text-xs text-neutral-400 mb-3">
-              顯示目前系統已發出的 Token（含可能已斷線但未釋放的幽靈佔用）。若遇「名額已滿」問題，請在此手動釋放。
+              顯示目前系統 25 個固定名額的使用狀況，以及實際連線到會議室的人員。
             </div>
-            <TokenStatusPanel opsId={opsRoom} />
+            <PersonnelStatusPanel
+              opsId={opsRoom}
+              allocations={allocations}
+              now={now}
+              error={dbError}
+            />
           </div>
 
-
-          <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-4">
-            <div className="mb-2 text-sm font-semibold">參與者狀態（SDK 即時）</div>
-            <div className="text-xs text-neutral-400">來源清單來自 Admin SDK 連線，會即時更新（無需手動刷新）。</div>
-            <div className="mt-3 rounded-xl border border-neutral-800 bg-neutral-950/30 p-3 text-sm">
-              {adminConfState.remotes.length === 0 ? (
-                <div className="text-neutral-400">（尚未偵測到參與者）</div>
-              ) : (
-                <ul className="space-y-1">
-                  {adminConfState.remotes.map((p) => (
-                    <li key={p.id} className="flex items-center justify-between gap-2">
-                      <span className="truncate">{p.name || '（未命名）'}</span>
-                      <span className="shrink-0 font-mono text-[10px] text-neutral-500">{p.id.slice(0, 10)}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-            </div>
-            <div className="mt-2 text-[11px] text-neutral-500">
-              Admin SDK：{adminConfState.status}
-              {adminConfState.error ? <span className="text-amber-200">（{adminConfState.error}）</span> : null}
-            </div>
-          </div>
         </div >
       </div >
+
+      {/* Legacy Code for Native Modal */}
+      {nativeModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-4">
+          <div className="w-full max-w-md bg-neutral-900 border border-neutral-800 rounded-2xl shadow-2xl p-6">
+            <h3 className="text-xl font-bold text-white mb-4">開啟原生會議室</h3>
+
+            {nativeLoading && (
+              <div className="flex flex-col items-center py-8 gap-3">
+                <div className="w-8 h-8 border-4 border-emerald-500 border-t-transparent rounded-full animate-spin"></div>
+                <div className="text-neutral-400">正在檢查權限並獲取 Token...</div>
+              </div>
+            )}
+
+            {nativeError && (
+              <div className="bg-rose-950/30 border border-rose-900/50 rounded-lg p-4 mb-4">
+                <div className="text-rose-400 font-bold mb-1">發生錯誤</div>
+                <div className="text-rose-300 text-sm">{nativeError}</div>
+                <div className="text-neutral-500 text-xs mt-2">請檢查網路連線或稍後再試。</div>
+              </div>
+            )}
+
+            {!nativeLoading && !nativeError && nativeUrl && (
+              <div className="flex flex-col gap-4">
+                <div className="bg-emerald-950/30 border border-emerald-900/50 rounded-lg p-4">
+                  <div className="text-emerald-400 font-bold mb-1">準備就緒</div>
+                  <div className="text-emerald-300 text-sm">您的 Admin 身份憑證已生成。</div>
+                </div>
+                <a
+                  href={nativeUrl}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="flex items-center justify-center w-full py-4 bg-emerald-500 hover:bg-emerald-400 text-black font-bold text-lg rounded-xl transition-all shadow-lg shadow-emerald-900/20"
+                  onClick={() => setNativeModalOpen(false)}
+                >
+                  進入會議室 (開啟新分頁) ➜
+                </a>
+                <div className="text-center text-xs text-neutral-500">
+                  點擊後系統將開啟 8x8.vc 視窗，請允許瀏覽器跳轉。
+                </div>
+              </div>
+            )}
+
+            <button
+              onClick={() => setNativeModalOpen(false)}
+              className="mt-4 w-full py-2 text-neutral-400 hover:text-white text-sm"
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+
     </div >
   )
 }

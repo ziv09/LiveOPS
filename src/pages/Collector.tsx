@@ -21,7 +21,7 @@ export function Collector() {
   const join = (searchParams.get('join') ?? '').trim() === '1'
   const [nameDraft, setNameDraft] = useState(() => {
     const raw = String(nameFromQuery || parsed?.name || '').trim()
-    return raw.replace(/^(src\.|mon\.|crew\.)/i, '')
+    return raw.replace(/^(src\.|mon\.|crew\.|crew_)/i, '')
   })
 
   const wakeLockRef = useRef<any | null>(null)

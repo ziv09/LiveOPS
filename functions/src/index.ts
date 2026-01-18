@@ -171,6 +171,12 @@ export const issueJaasToken = onCall(
     if (!kid) throw new HttpsError('failed-precondition', 'Cloud Functions 尚未設定 JAAS_KID。')
     if (!tenantId) throw new HttpsError('failed-precondition', 'Cloud Functions 尚未設定 JAAS_TENANT_ID。')
 
+    console.log('[issueJaasToken] Debug Secrets:', {
+      tenantPrefix: tenantId.slice(0, 15),
+      kid: kid,
+      keyLength: privateKeyPem ? privateKeyPem.length : 0
+    })
+
     const roomRef = admin.database().ref(`liveops/v2/jaas/rooms/${ops}/state`)
     const now = Date.now()
 
@@ -256,16 +262,41 @@ export const cleanupJaasPresence = onSchedule('every 1 minutes', async () => {
   const snap = await root.get()
   if (!snap.exists()) return
   const now = Date.now()
-  const updates: Record<string, any> = {}
+  const ROOM_EMPTY_TTL_MS = 30 * 60 * 1000 // 30 分鐘
 
-  const rooms = snap.val() as Record<string, { state?: RoomState }>
+  const rooms = snap.val() as Record<string, { state?: RoomState & { emptyAt?: number } }>
+
   for (const [ops, room] of Object.entries(rooms ?? {})) {
     const cleaned = compactState(room?.state ?? null, now)
-    updates[`liveops/v2/jaas/rooms/${ops}/state`] = cleaned
-  }
+    const hasAllocations = Object.keys(cleaned.allocations ?? {}).length > 0
 
-  if (Object.keys(updates).length > 0) {
-    await admin.database().ref().update(updates)
+    if (hasAllocations) {
+      // 有人在線，清除 emptyAt 並更新狀態
+      await admin.database().ref(`liveops/v2/jaas/rooms/${ops}/state`).update({
+        ...cleaned,
+        emptyAt: null,
+      })
+    } else {
+      // 沒人在線
+      const existingEmptyAt = room?.state?.emptyAt
+
+      if (existingEmptyAt) {
+        // 已經記錄過空房時間，檢查是否超過 30 分鐘
+        if (now - existingEmptyAt > ROOM_EMPTY_TTL_MS) {
+          // 超過 30 分鐘，刪除整個房間
+          await admin.database().ref(`liveops/v2/jaas/rooms/${ops}`).remove()
+          console.log(`[cleanup] Deleted empty room: ${ops} (empty since ${new Date(existingEmptyAt).toISOString()})`)
+        }
+        // 還沒超過 30 分鐘，不做任何事
+      } else {
+        // 第一次偵測到空房，記錄時間戳
+        await admin.database().ref(`liveops/v2/jaas/rooms/${ops}/state`).update({
+          ...cleaned,
+          emptyAt: now,
+        })
+        console.log(`[cleanup] Marked room as empty: ${ops}`)
+      }
+    }
   }
 })
 

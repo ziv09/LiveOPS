@@ -1,6 +1,6 @@
-export type RoleNamePrefix = 'src.' | 'mon.' | 'crew.'
+export type RoleNamePrefix = 'src.' | 'mon.' | 'crew.' | 'crew_'
 
-const KNOWN_PREFIX_RE = /^(src\.|mon\.|crew\.)/i
+const KNOWN_PREFIX_RE = /^(src\.|mon\.|crew\.|crew_)/i
 
 export function ensureRoleName(prefix: RoleNamePrefix, raw: string, fallbackBaseName: string): string {
   const trimmed = String(raw ?? '').trim()
@@ -20,6 +20,7 @@ export function getRolePrefixFromDisplayName(displayName: string): RoleNamePrefi
   if (n.startsWith('src.')) return 'src.'
   if (n.startsWith('mon.')) return 'mon.'
   if (n.startsWith('crew.')) return 'crew.'
+  if (n.startsWith('crew_')) return 'crew_'
   return null
 }
 
