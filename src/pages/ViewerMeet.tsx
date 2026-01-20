@@ -133,15 +133,20 @@ export function ViewerMeet() {
 
   // --- Time Control (Viewer) ---
   const [timeControl, setTimeControl] = useState<{ mode: 'auto' | 'manual'; base?: number; display?: number }>({ mode: 'auto' })
+  // Use Ref to access latest state inside interval without resetting it
+  const timeControlRef = useRef(timeControl)
+  useEffect(() => { timeControlRef.current = timeControl }, [timeControl])
+
   const [nowDate, setNowDate] = useState('')
   const [nowTime, setNowTime] = useState('')
 
   useEffect(() => {
-    // Weekday map
     const days = ['日', '一', '二', '三', '四', '五', '六']
 
-    const renderTime = () => {
+    const tick = () => {
+      const tc = timeControlRef.current
       const d = new Date()
+
       // Date: Always today's real date
       const yyyy = d.getFullYear()
       const MM = String(d.getMonth() + 1).padStart(2, '0')
@@ -151,11 +156,13 @@ export function ViewerMeet() {
 
       // Time: Auto or Manual
       let h, m, s
-      if (timeControl.mode === 'manual' && timeControl.base && typeof timeControl.display === 'number') {
-        const elapsedSeconds = (Date.now() - timeControl.base) / 1000
-        let totalSeconds = timeControl.display + elapsedSeconds
+      if (tc.mode === 'manual' && typeof tc.base === 'number' && typeof tc.display === 'number') {
+        // Manual: Calculate elapsed time since the base timestamp
+        const now = Date.now()
+        const elapsedSeconds = (now - tc.base) / 1000
+        let totalSeconds = tc.display + elapsedSeconds
 
-        // normalize to one day (0-86400)
+        // Fix: Handle day rollover (0-86400)
         totalSeconds = totalSeconds % 86400
         if (totalSeconds < 0) totalSeconds += 86400
 
@@ -163,6 +170,7 @@ export function ViewerMeet() {
         m = Math.floor((totalSeconds % 3600) / 60)
         s = Math.floor(totalSeconds % 60)
       } else {
+        // Auto: Use system time
         h = d.getHours()
         m = d.getMinutes()
         s = d.getSeconds()
@@ -171,10 +179,11 @@ export function ViewerMeet() {
       setNowTime(`${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`)
     }
 
-    const t = window.setInterval(renderTime, 200)
-    renderTime() // init
+    // Run tick immediately and then every 200ms
+    tick()
+    const t = window.setInterval(tick, 200)
     return () => window.clearInterval(t)
-  }, [timeControl])
+  }, []) // Empty dependency: Interval runs forever, reads from Ref
 
   useEffect(() => {
     const db = getFirebaseDatabase()
@@ -462,10 +471,9 @@ export function ViewerMeet() {
               </div>
               <div className="font-mono font-bold leading-none tracking-tight"
                 style={{
-                  fontSize: 'clamp(3rem, 12vw, 180pt)', // Responsive but target 180pt on big screens
+                  fontSize: 'clamp(3rem, 12vw, 50pt)', // Responsive but target 180pt on big screens
                   lineHeight: '1',
                   color: '#ef4444', // Red-500
-                  WebkitTextStroke: '3px white', // White stroke
                   textShadow: '0 4px 10px rgba(0,0,0,0.5)'
                 }}>
                 {nowTime}
@@ -522,10 +530,7 @@ export function ViewerMeet() {
 
         {/* Right: source grid */}
         <div className="flex h-full w-full flex-col gap-3 p-3">
-          <div className="rounded-2xl border border-neutral-800 bg-neutral-900/30 p-3 text-center">
-            <div className="text-sm font-semibold text-rose-200">Source 組</div>
-            <div className="text-xs text-neutral-400">點擊任一格可放大至全螢幕</div>
-          </div>
+
 
           <div className="grid flex-1 grid-cols-2 gap-3 overflow-hidden">
             {visibleSourceSlots.map((slot, idx) => {

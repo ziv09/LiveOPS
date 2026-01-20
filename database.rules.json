@@ -19,7 +19,9 @@
                         "$room": {
                             "state": {
                                 ".read": "auth != null",
-                                ".write": "false"
+                                "timeControl": {
+                                    ".write": "auth != null"
+                                }
                             }
                         }
                     }
